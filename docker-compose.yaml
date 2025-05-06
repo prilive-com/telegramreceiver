@@ -1,0 +1,10 @@
+services:
+  telegram-bot:
+    build: .
+    env_file: .env
+    ports:
+      - "8443:8443"          # host → container
+    volumes:
+      - ./tls:/tls:ro        # mount certs read-only
+      - ./logs:/app/logs     # optional: persist logs
+    restart: unless-stopped
