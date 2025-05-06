@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/prilive-com/telegramreceiver"
+	"github.com/prilive-com/telegramreceiver/telegramreceiver"
 	"log"
 	"log/slog"
 	"os"
