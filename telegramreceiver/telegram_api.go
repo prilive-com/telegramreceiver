@@ -28,8 +28,9 @@ type WebhookHandler struct {
 }
 
 type TelegramUpdate struct {
-	UpdateID int             `json:"update_id"`
-	Message  json.RawMessage `json:"message"`
+	UpdateID      int             `json:"update_id"`
+	Message       json.RawMessage `json:"message,omitempty"`
+	CallbackQuery json.RawMessage `json:"callback_query,omitempty"`
 }
 
 /* ---------- constructor ---------- */
