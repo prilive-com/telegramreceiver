@@ -27,12 +27,6 @@ type WebhookHandler struct {
 	maxBodySize int64
 }
 
-type TelegramUpdate struct {
-	UpdateID      int             `json:"update_id"`
-	Message       json.RawMessage `json:"message,omitempty"`
-	CallbackQuery json.RawMessage `json:"callback_query,omitempty"`
-}
-
 /* ---------- constructor ---------- */
 
 // All tunables are injected – nothing hard-coded.

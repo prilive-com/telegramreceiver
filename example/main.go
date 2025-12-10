@@ -2,14 +2,14 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/prilive-com/telegramreceiver/telegramreceiver"
 	"log"
 	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/prilive-com/telegramreceiver/telegramreceiver"
 )
 
 func main() {
@@ -65,7 +65,7 @@ func main() {
 	for {
 		select {
 		case update := <-updatesChan:
-			printPrettyTelegramUpdate(update, logger)
+			printTelegramUpdate(update, logger)
 
 		case sig := <-sigChan:
 			logger.Info("Received shutdown signal", "signal", sig)
@@ -75,22 +75,64 @@ func main() {
 	}
 }
 
-// printPrettyTelegramUpdate prints incoming Telegram messages clearly and prettily.
-func printPrettyTelegramUpdate(update telegramreceiver.TelegramUpdate, logger *slog.Logger) {
+// printTelegramUpdate prints incoming Telegram messages using typed structs.
+func printTelegramUpdate(update telegramreceiver.TelegramUpdate, logger *slog.Logger) {
 	logger.Info("Received new Telegram Update", "update_id", update.UpdateID)
 
-	var prettyJSON map[string]interface{}
-	if err := json.Unmarshal(update.Message, &prettyJSON); err != nil {
-		logger.Error("Failed to parse Telegram message", "error", err)
-		return
+	// Handle regular messages
+	if update.Message != nil {
+		msg := update.Message
+		fmt.Printf("\n--- New Message (Update ID: %d) ---\n", update.UpdateID)
+		fmt.Printf("Message ID: %d\n", msg.MessageID)
+
+		if msg.From != nil {
+			fmt.Printf("From: %s %s (@%s, ID: %d)\n",
+				msg.From.FirstName,
+				msg.From.LastName,
+				msg.From.Username,
+				msg.From.ID)
+		}
+
+		if msg.Chat != nil {
+			fmt.Printf("Chat: %s (ID: %d, Type: %s)\n",
+				msg.Chat.Title,
+				msg.Chat.ID,
+				msg.Chat.Type)
+		}
+
+		if msg.Text != "" {
+			fmt.Printf("Text: %s\n", msg.Text)
+		}
+
+		if len(msg.Photo) > 0 {
+			fmt.Printf("Photo: %d size(s), largest: %s\n",
+				len(msg.Photo),
+				msg.Photo[len(msg.Photo)-1].FileID)
+		}
+
+		if msg.Document != nil {
+			fmt.Printf("Document: %s (%s)\n",
+				msg.Document.FileName,
+				msg.Document.MimeType)
+		}
+
+		fmt.Println("-----------------------------------")
 	}
 
-	prettyData, err := json.MarshalIndent(prettyJSON, "", "  ")
-	if err != nil {
-		logger.Error("Failed to format Telegram message", "error", err)
-		return
-	}
+	// Handle callback queries (inline button clicks)
+	if update.CallbackQuery != nil {
+		cb := update.CallbackQuery
+		fmt.Printf("\n--- Callback Query (Update ID: %d) ---\n", update.UpdateID)
+		fmt.Printf("Callback ID: %s\n", cb.ID)
+		fmt.Printf("Data: %s\n", cb.Data)
 
-	fmt.Printf("\n✅ New Telegram Message Received (Update ID: %d):\n%s\n",
-		update.UpdateID, string(prettyData))
+		if cb.From != nil {
+			fmt.Printf("From: %s (@%s, ID: %d)\n",
+				cb.From.FirstName,
+				cb.From.Username,
+				cb.From.ID)
+		}
+
+		fmt.Println("--------------------------------------")
+	}
 }

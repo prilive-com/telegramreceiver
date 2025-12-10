@@ -1,115 +1,60 @@
-# telegramreceiver
+# telegramreceiver v2
 
-**telegramreceiver** is a production‑ready, Go 1.24+ library and companion example application that lets you consume Telegram bot updates via an HTTPS webhook, forward them into your own code (queues, databases, OpenAI calls …) and run resiliently in Docker or Kubernetes.
+> **Note**: v2.x uses typed structs instead of `json.RawMessage`. See [Migration](#migration-from-v1) below.
 
-### This librarry can receive only text messages!
-
----
-
-## ✨ What you get
-
-| Capability            | Details                                                                                            |
-| --------------------- | -------------------------------------------------------------------------------------------------- |
-| Secure webhook server | HTTPS (TLS 1.2+), optional Cloudflare client‑certs, host check, Telegram secret‑token check        |
-| Resilience            | Rate‑limiter (\_golang.org/x/time/rate\_), circuit‑breaker (\_sony/gobreaker\_), graceful shutdown |
-| Performance           | Request‑body max‑size guard, sync.Pool buffer reuse, buffered update channel                       |
-| Observability         | Go 1.24 `log/slog` JSON logs, structured errors                                                    |
-| Configurable          | Everything via env‑vars → Config struct (defaults supplied)                                        |
-| Container‑ready       | Multi‑stage Dockerfile, Docker‑Compose example, environment file sample                            |
-| Tests                 | Unit tests for config loader (more welcome!)                                                       |
+**telegramreceiver** is a production-ready Go 1.24+ library for consuming Telegram bot updates via HTTPS webhook with resilience features.
 
 ---
 
-## 📦 Installation
+## Features
+
+| Capability | Details |
+|------------|---------|
+| **Message Types** | Text, photos, documents, contacts, locations, callback queries |
+| **Typed Structs** | `Message`, `User`, `Chat`, `CallbackQuery` - no manual JSON parsing |
+| **Security** | HTTPS (TLS 1.2+), host validation, Telegram secret-token check |
+| **Resilience** | Rate-limiter, circuit-breaker, graceful shutdown |
+| **Performance** | Request-body max-size guard, sync.Pool buffer reuse |
+| **Observability** | Go 1.24 `log/slog` JSON structured logging |
+| **Configuration** | Environment variables with sensible defaults |
+
+---
+
+## Installation
 
 ```bash
-go get github.com/prilive-com/telegramreceiver/telegramreceiver
+go get github.com/prilive-com/telegramreceiver/telegramreceiver@latest
 ```
 
-*(The trailing `/telegramreceiver` is required because the library code lives in that sub‑folder.)*
+Requires Go 1.24.3+
 
 ---
 
-## 🏗️ Architecture
-
-```
-┌────────┐   HTTPS Webhook   ┌────────────┐        Channel         ┌──────────────┐
-│Telegram│ ────────────────▶ │   Handler   │ ─────────────────────▶ │Your App Logic│
-└────────┘                   │(rate‑limit)│                        └──────────────┘
-                             │(circuit‑br)│
-                             └────────────┘
-```
-
-* **WebhookHandler**
-
-  * Validates host, secret token, HTTP method.
-  * Rate‑limits & circuit‑breaks.
-  * Reads JSON update into pooled buffer → forwards whole raw update on `Updates` channel.
-* **StartWebhookServer**
-
-  * Small HTTPS server with configurable read/write/idle timeouts.
-  * Graceful shutdown on `context.Cancel`.
-* **Config**
-
-  * Populated entirely from environment variables with sensible defaults.
-
----
-
-## ⚡ Quick start (example application)
-
-1. **Clone** repository and edit `.env` with your real paths & tokens.
-2. **TLS**: place valid cert/key in `tls/` (or point to external volume).
-3. **Build & run**:
-
-   ```bash
-   docker compose build
-   docker compose up -d
-   docker compose logs -f telegram-bot
-   ```
-4. **Register** webhook with Telegram:
-
-   ```bash
-   curl -X POST "https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook" \
-        -H "Content-Type: application/json" \
-        -d '{"url":"https://your.domain.com:8443","secret_token":"<WEBHOOK_SECRET>"}'
-   ```
-5. Send a message to your bot → you’ll see pretty‑printed JSON in the logs.
-
-Full walk‑through lives in the README [Docker Compose section](#docker-compose-deploy).
-
----
-
-## 🔑 All environment variables
-
-| Variable                                        | Default                     | Description                                           |
-| ----------------------------------------------- | --------------------------- | ----------------------------------------------------- |
-| `WEBHOOK_PORT`                                  | `8443`                      | HTTPS listen port inside the container                |
-| `TLS_CERT_PATH`, `TLS_KEY_PATH`                 | *(none)*                    | Paths **inside the container** to certificate and key |
-| `LOG_FILE_PATH`                                 | `logs/telegramreceiver.log` | File plus JSON logs to stdout                         |
-| `WEBHOOK_SECRET`                                |                             | Secret token sent back to Telegram for verification   |
-| `ALLOWED_DOMAIN`                                |                             | If set, request’s `Host` header must match            |
-| `RATE_LIMIT_REQUESTS`                           |  `10`                       | Allowed requests per second                           |
-| `RATE_LIMIT_BURST`                              |  `20`                       | Extra burst tokens                                    |
-| `MAX_BODY_SIZE`                                 |  `1048576`                  | Max bytes read from body (1 MiB default)              |
-| `READ_TIMEOUT`, `WRITE_TIMEOUT`, `IDLE_TIMEOUT` | `10s`,`15s`,`120s`          | Connection timeouts                                   |
-| `BREAKER_MAX_REQUESTS`                          |  `5`                        | Requests allowed in half‑open state                   |
-| `BREAKER_INTERVAL`                              |  `2m`                       | Window that resets failure counters                   |
-| `BREAKER_TIMEOUT`                               |  `60s`                      | How long breaker stays open                           |
-
----
-
-## 🧩 Integrating the library in **your** code
+## Quick Start
 
 ```go
+package main
+
 import (
+    "context"
+    "fmt"
+    "log"
     "log/slog"
+
     "github.com/prilive-com/telegramreceiver/telegramreceiver"
 )
 
 func main() {
-    cfg, _ := telegramreceiver.LoadConfig()
+    cfg, err := telegramreceiver.LoadConfig()
+    if err != nil {
+        log.Fatal(err)
+    }
 
-    logger, _ := telegramreceiver.NewLogger(slog.LevelInfo, cfg.LogFilePath)
+    logger, err := telegramreceiver.NewLogger(slog.LevelInfo, cfg.LogFilePath)
+    if err != nil {
+        log.Fatal(err)
+    }
+
     updates := make(chan telegramreceiver.TelegramUpdate, 100)
 
     handler := telegramreceiver.NewWebhookHandler(
@@ -127,34 +72,250 @@ func main() {
 
     go telegramreceiver.StartWebhookServer(context.Background(), cfg, handler, logger)
 
-    for upd := range updates {
-        // 🪄  do something interesting
+    // Process updates with typed structs
+    for update := range updates {
+        if update.Message != nil {
+            fmt.Printf("Message from %s: %s\n",
+                update.Message.From.Username,
+                update.Message.Text)
+        }
+
+        if update.CallbackQuery != nil {
+            fmt.Printf("Button click: %s\n", update.CallbackQuery.Data)
+        }
     }
 }
 ```
 
-Add your own business logic right after reading from `updates`.
+---
+
+## Typed Structs (v2)
+
+v2 provides fully typed structs - no manual JSON parsing required:
+
+### TelegramUpdate
+
+```go
+type TelegramUpdate struct {
+    UpdateID      int            `json:"update_id"`
+    Message       *Message       `json:"message,omitempty"`
+    EditedMessage *Message       `json:"edited_message,omitempty"`
+    CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+}
+```
+
+### Message
+
+```go
+type Message struct {
+    MessageID      int             `json:"message_id"`
+    From           *User           `json:"from,omitempty"`
+    Chat           *Chat           `json:"chat"`
+    Date           int             `json:"date"`
+    Text           string          `json:"text,omitempty"`
+    ReplyToMessage *Message        `json:"reply_to_message,omitempty"`
+    Photo          []PhotoSize     `json:"photo,omitempty"`
+    Document       *Document       `json:"document,omitempty"`
+    Caption        string          `json:"caption,omitempty"`
+    Contact        *Contact        `json:"contact,omitempty"`
+    Location       *Location       `json:"location,omitempty"`
+}
+```
+
+### User
+
+```go
+type User struct {
+    ID           int64  `json:"id"`
+    IsBot        bool   `json:"is_bot"`
+    FirstName    string `json:"first_name"`
+    LastName     string `json:"last_name,omitempty"`
+    Username     string `json:"username,omitempty"`
+    LanguageCode string `json:"language_code,omitempty"`
+}
+```
+
+### Chat
+
+```go
+type Chat struct {
+    ID        int64  `json:"id"`
+    Type      string `json:"type"`        // "private", "group", "supergroup", "channel"
+    Title     string `json:"title,omitempty"`
+    Username  string `json:"username,omitempty"`
+    FirstName string `json:"first_name,omitempty"`
+    LastName  string `json:"last_name,omitempty"`
+}
+```
+
+### CallbackQuery
+
+```go
+type CallbackQuery struct {
+    ID              string   `json:"id"`
+    From            *User    `json:"from"`
+    Message         *Message `json:"message,omitempty"`
+    InlineMessageID string   `json:"inline_message_id,omitempty"`
+    Data            string   `json:"data,omitempty"`
+}
+```
 
 ---
 
-## 🐳 Docker Compose deploy <a name="docker-compose-deploy"></a>
+## Usage Examples
 
-See `Dockerfile`, `docker-compose.yml`, and `.env` in the repo for a ready‑made deployment that you can adapt for production CI/CD pipelines.
+### Handle Text Messages
+
+```go
+for update := range updates {
+    if update.Message != nil && update.Message.Text != "" {
+        userID := update.Message.From.ID
+        chatID := update.Message.Chat.ID
+        text := update.Message.Text
+
+        fmt.Printf("User %d in chat %d: %s\n", userID, chatID, text)
+    }
+}
+```
+
+### Handle Photos
+
+```go
+if update.Message != nil && len(update.Message.Photo) > 0 {
+    // Photos come in multiple sizes, largest is last
+    largest := update.Message.Photo[len(update.Message.Photo)-1]
+    fmt.Printf("Photo file_id: %s\n", largest.FileID)
+
+    if update.Message.Caption != "" {
+        fmt.Printf("Caption: %s\n", update.Message.Caption)
+    }
+}
+```
+
+### Handle Callback Queries (Inline Buttons)
+
+```go
+if update.CallbackQuery != nil {
+    cb := update.CallbackQuery
+    fmt.Printf("User %s clicked button with data: %s\n",
+        cb.From.Username,
+        cb.Data)
+
+    // Answer the callback to remove loading state
+    // (use telegramsender or direct API call)
+}
+```
+
+### Handle Documents
+
+```go
+if update.Message != nil && update.Message.Document != nil {
+    doc := update.Message.Document
+    fmt.Printf("Document: %s (%s, %d bytes)\n",
+        doc.FileName,
+        doc.MimeType,
+        doc.FileSize)
+}
+```
 
 ---
 
-## 🗺️ Roadmap / contributions
+## Architecture
 
-| Planned                                | Status |
-| -------------------------------------- | ------ |
-| Benchmark suite for buffer‑pool tuning | ─      |
-| Kubernetes Helm chart                  | coming |
-| CI workflow (Go Vet/Lint/Test)         | coming |
+```
+┌────────┐   HTTPS Webhook   ┌─────────────┐     Channel      ┌───────────────┐
+│Telegram│ ────────────────▶ │WebhookHandler│ ───────────────▶ │Your App Logic│
+└────────┘                   │ rate-limit  │                  └───────────────┘
+                             │circuit-break│
+                             └─────────────┘
+```
 
-PRs & issues are welcome—please follow conventional commits and run `go vet && go test` before submitting.
+- **WebhookHandler**: Validates host, secret token, HTTP method. Rate-limits & circuit-breaks.
+- **StartWebhookServer**: HTTPS server with configurable timeouts and graceful shutdown.
+- **Config**: Populated from environment variables with sensible defaults.
 
 ---
 
-## 📜 License
+## Environment Variables
 
-MIT © 2025 Prilive Com
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEBHOOK_PORT` | `8443` | HTTPS listen port |
+| `TLS_CERT_PATH` | *(required)* | Path to TLS certificate |
+| `TLS_KEY_PATH` | *(required)* | Path to TLS private key |
+| `LOG_FILE_PATH` | `logs/telegramreceiver.log` | Log file path |
+| `WEBHOOK_SECRET` | *(optional)* | Secret token for Telegram verification |
+| `ALLOWED_DOMAIN` | *(optional)* | Required Host header value |
+| `RATE_LIMIT_REQUESTS` | `10` | Requests per second |
+| `RATE_LIMIT_BURST` | `20` | Burst tokens |
+| `MAX_BODY_SIZE` | `1048576` | Max request body (1 MiB) |
+| `READ_TIMEOUT` | `10s` | HTTP read timeout |
+| `WRITE_TIMEOUT` | `15s` | HTTP write timeout |
+| `IDLE_TIMEOUT` | `120s` | HTTP idle timeout |
+| `BREAKER_MAX_REQUESTS` | `5` | Circuit breaker half-open requests |
+| `BREAKER_INTERVAL` | `2m` | Circuit breaker reset interval |
+| `BREAKER_TIMEOUT` | `60s` | Circuit breaker open duration |
+
+---
+
+## Migration from v1
+
+### Breaking Change: Typed Structs
+
+v1 used `json.RawMessage` requiring manual parsing:
+
+```go
+// v1 - Manual parsing required
+var msg map[string]interface{}
+json.Unmarshal(update.Message, &msg)
+text := msg["text"].(string) // Unsafe type assertion
+```
+
+v2 uses typed structs:
+
+```go
+// v2 - Direct access
+text := update.Message.Text           // string
+userID := update.Message.From.ID      // int64
+chatID := update.Message.Chat.ID      // int64
+```
+
+### Migration Steps
+
+1. Update import (same path, no `/v2` suffix needed)
+2. Remove all `json.Unmarshal(update.Message, ...)` calls
+3. Access fields directly: `update.Message.Text`, `update.Message.From.ID`
+4. Handle nil checks: `if update.Message != nil { ... }`
+
+---
+
+## Webhook Setup
+
+Register your webhook with Telegram:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "url": "https://your.domain.com:8443",
+       "secret_token": "<WEBHOOK_SECRET>"
+     }'
+```
+
+---
+
+## Docker Compose
+
+See `Dockerfile`, `docker-compose.yml`, and `.env` in the repo for production deployment.
+
+```bash
+docker compose build
+docker compose up -d
+docker compose logs -f
+```
+
+---
+
+## License
+
+MIT © 2025 Prilive Com
