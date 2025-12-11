@@ -5,7 +5,7 @@ This guide helps developers integrate the telegramreceiver library into their ap
 ## Installation
 
 ```bash
-go get github.com/prilive-com/telegramreceiver/telegramreceiver@latest
+go get github.com/prilive-com/telegramreceiver/v2@latest
 ```
 
 Requires Go 1.24.3+
@@ -44,7 +44,7 @@ import (
     "os/signal"
     "syscall"
 
-    "github.com/prilive-com/telegramreceiver/telegramreceiver"
+    "github.com/prilive-com/telegramreceiver/v2/telegramreceiver"
 )
 
 func main() {
@@ -355,7 +355,7 @@ func handleUpdate(update telegramreceiver.TelegramUpdate) {
 
 ```go
 import (
-    "github.com/prilive-com/telegramreceiver/telegramreceiver"
+    "github.com/prilive-com/telegramreceiver/v2/telegramreceiver"
     "github.com/prilive-com/telegramsender/v2/telegramsender"
 )
 

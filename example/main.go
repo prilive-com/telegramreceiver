@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/prilive-com/telegramreceiver/telegramreceiver"
+	"github.com/prilive-com/telegramreceiver/v2/telegramreceiver"
 )
 
 func main() {

@@ -23,7 +23,7 @@
 ## Installation
 
 ```bash
-go get github.com/prilive-com/telegramreceiver/telegramreceiver@latest
+go get github.com/prilive-com/telegramreceiver/v2@latest
 ```
 
 Requires Go 1.24.3+
@@ -41,7 +41,7 @@ import (
     "log"
     "log/slog"
 
-    "github.com/prilive-com/telegramreceiver/telegramreceiver"
+    "github.com/prilive-com/telegramreceiver/v2/telegramreceiver"
 )
 
 func main() {
@@ -282,7 +282,7 @@ chatID := update.Message.Chat.ID      // int64
 
 ### Migration Steps
 
-1. Update import (same path, no `/v2` suffix needed)
+1. Update import to include `/v2`: `github.com/prilive-com/telegramreceiver/v2/telegramreceiver`
 2. Remove all `json.Unmarshal(update.Message, ...)` calls
 3. Access fields directly: `update.Message.Text`, `update.Message.From.ID`
 4. Handle nil checks: `if update.Message != nil { ... }`
