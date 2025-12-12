@@ -1,6 +1,7 @@
 package telegramreceiver
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io"
@@ -85,7 +86,7 @@ func (wh *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return nil, errors.New("forbidden")
 		}
 		if wh.webhookSecret != "" &&
-			r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != wh.webhookSecret {
+			subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), []byte(wh.webhookSecret)) != 1 {
 			return nil, errors.New("unauthorized")
 		}
 		if r.Method != http.MethodPost {

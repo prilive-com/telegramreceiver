@@ -17,6 +17,7 @@ type Config struct {
 	RateLimitBurst     int
 	MaxBodySize        int64
 	ReadTimeout        time.Duration
+	ReadHeaderTimeout  time.Duration
 	WriteTimeout       time.Duration
 	IdleTimeout        time.Duration
 	BreakerMaxRequests uint32
@@ -46,6 +47,11 @@ func LoadConfig() (*Config, error) {
 	}
 
 	readTimeout, err := time.ParseDuration(getEnv("READ_TIMEOUT", "10s"))
+	if err != nil {
+		return nil, err
+	}
+
+	readHeaderTimeout, err := time.ParseDuration(getEnv("READ_HEADER_TIMEOUT", "2s"))
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +92,7 @@ func LoadConfig() (*Config, error) {
 		RateLimitBurst:     rateLimitBurst,
 		MaxBodySize:        maxBodySize,
 		ReadTimeout:        readTimeout,
+		ReadHeaderTimeout:  readHeaderTimeout,
 		WriteTimeout:       writeTimeout,
 		IdleTimeout:        idleTimeout,
 		BreakerMaxRequests: uint32(breakerMaxRequests),

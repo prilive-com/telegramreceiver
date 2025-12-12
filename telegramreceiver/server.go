@@ -22,11 +22,13 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 	}
 
 	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.WebhookPort),
-		Handler:      handler,
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
-		IdleTimeout:  cfg.IdleTimeout,
+		Addr:              fmt.Sprintf(":%d", cfg.WebhookPort),
+		Handler:           handler,
+		ReadTimeout:       cfg.ReadTimeout,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
+		MaxHeaderBytes:    1 << 20, // 1 MB
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
