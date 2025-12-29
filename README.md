@@ -2,7 +2,7 @@
 
 > **Note**: v2.x uses typed structs instead of `json.RawMessage`. See [Migration](#migration-from-v1) below.
 
-**telegramreceiver** is a production-ready Go 1.24+ library for consuming Telegram bot updates via HTTPS webhook with resilience features.
+**telegramreceiver** is a production-ready Go 1.25+ library for consuming Telegram bot updates via HTTPS webhook with resilience features.
 
 ---
 
@@ -12,10 +12,12 @@
 |------------|---------|
 | **Message Types** | Text, photos, documents, contacts, locations, callback queries |
 | **Typed Structs** | `Message`, `User`, `Chat`, `CallbackQuery` - no manual JSON parsing |
-| **Security** | HTTPS (TLS 1.2+), host validation, Telegram secret-token check |
-| **Resilience** | Rate-limiter, circuit-breaker, graceful shutdown |
+| **Typed Errors** | `WebhookError` with HTTP status codes for clean error handling |
+| **Security** | HTTPS (TLS 1.2+), X25519/P256 curves, host validation, constant-time secret check |
+| **Resilience** | Rate-limiter, circuit-breaker, Kubernetes-aware graceful shutdown |
+| **Health Probes** | `/healthz` and `/readyz` endpoints for Kubernetes liveness/readiness |
 | **Performance** | Request-body max-size guard, sync.Pool buffer reuse |
-| **Observability** | Go 1.24 `log/slog` JSON structured logging |
+| **Observability** | Go 1.25 `log/slog` JSON logging with `SecretToken` redaction |
 | **Configuration** | Environment variables with sensible defaults |
 
 ---
@@ -26,7 +28,7 @@
 go get github.com/prilive-com/telegramreceiver/v2@latest
 ```
 
-Requires Go 1.24.3+
+Requires Go 1.25+
 
 ---
 
@@ -162,6 +164,40 @@ type CallbackQuery struct {
 
 ---
 
+## Typed Errors
+
+The library provides typed errors with HTTP status codes:
+
+```go
+type WebhookError struct {
+    Code    int
+    Message string
+    Err     error
+}
+
+// Sentinel errors
+var (
+    ErrForbidden        = &WebhookError{Code: 403, Message: "forbidden"}
+    ErrUnauthorized     = &WebhookError{Code: 401, Message: "unauthorized"}
+    ErrMethodNotAllowed = &WebhookError{Code: 405, Message: "method not allowed"}
+    ErrChannelBlocked   = &WebhookError{Code: 503, Message: "updates channel blocked"}
+)
+```
+
+---
+
+## Sensitive Data Redaction
+
+Use `SecretToken` type for automatic log redaction:
+
+```go
+token := telegramreceiver.SecretToken("my-secret-api-key")
+logger.Info("config loaded", "webhook_secret", token)
+// Output: {"webhook_secret": "[REDACTED]"}
+```
+
+---
+
 ## Usage Examples
 
 ### Handle Text Messages
@@ -223,16 +259,55 @@ if update.Message != nil && update.Message.Document != nil {
 ## Architecture
 
 ```
-┌────────┐   HTTPS Webhook   ┌─────────────┐     Channel      ┌───────────────┐
-│Telegram│ ────────────────▶ │WebhookHandler│ ───────────────▶ │Your App Logic│
-└────────┘                   │ rate-limit  │                  └───────────────┘
-                             │circuit-break│
-                             └─────────────┘
+┌────────┐   HTTPS Webhook   ┌─────────────────┐     Channel      ┌───────────────┐
+│Telegram│ ────────────────▶ │ WebhookHandler  │ ───────────────▶ │Your App Logic │
+└────────┘                   │  - rate-limit   │                  └───────────────┘
+                             │  - circuit-break│
+                             │  - health probes│
+                             └─────────────────┘
 ```
 
 - **WebhookHandler**: Validates host, secret token, HTTP method. Rate-limits & circuit-breaks.
-- **StartWebhookServer**: HTTPS server with configurable timeouts and graceful shutdown.
+- **StartWebhookServer**: HTTPS server with health endpoints, configurable timeouts, and Kubernetes-aware graceful shutdown.
 - **Config**: Populated from environment variables with sensible defaults.
+
+---
+
+## Health Endpoints
+
+The server automatically exposes Kubernetes-compatible health endpoints:
+
+| Endpoint | Purpose | Behavior |
+|----------|---------|----------|
+| `/healthz` | Liveness probe | Returns 200 OK, or 503 during shutdown |
+| `/readyz` | Readiness probe | Returns 200 OK, or 503 during shutdown |
+
+### Kubernetes Configuration
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8443
+    scheme: HTTPS
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8443
+    scheme: HTTPS
+  initialDelaySeconds: 5
+  periodSeconds: 5
+```
+
+### Graceful Shutdown Sequence
+
+1. Context cancelled (SIGTERM received)
+2. Health endpoints start returning 503
+3. Drain delay (`DRAIN_DELAY`) - allows load balancer to stop routing
+4. Graceful shutdown (`SHUTDOWN_TIMEOUT`) - drains existing connections
 
 ---
 
@@ -250,11 +325,24 @@ if update.Message != nil && update.Message.Document != nil {
 | `RATE_LIMIT_BURST` | `20` | Burst tokens |
 | `MAX_BODY_SIZE` | `1048576` | Max request body (1 MiB) |
 | `READ_TIMEOUT` | `10s` | HTTP read timeout |
+| `READ_HEADER_TIMEOUT` | `2s` | HTTP read header timeout |
 | `WRITE_TIMEOUT` | `15s` | HTTP write timeout |
 | `IDLE_TIMEOUT` | `120s` | HTTP idle timeout |
 | `BREAKER_MAX_REQUESTS` | `5` | Circuit breaker half-open requests |
 | `BREAKER_INTERVAL` | `2m` | Circuit breaker reset interval |
 | `BREAKER_TIMEOUT` | `60s` | Circuit breaker open duration |
+| `DRAIN_DELAY` | `5s` | Time to wait for LB to stop routing before shutdown |
+| `SHUTDOWN_TIMEOUT` | `15s` | Max time for graceful shutdown |
+
+---
+
+## TLS Configuration
+
+The server enforces modern TLS settings:
+
+- **Minimum version**: TLS 1.2
+- **Curve preferences**: X25519 (fast, secure), P256 (compatibility)
+- **SHA-1**: Disabled in TLS 1.2 handshakes (Go 1.25 default)
 
 ---
 

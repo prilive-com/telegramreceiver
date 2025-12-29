@@ -3,7 +3,6 @@ package telegramreceiver
 import (
 	"crypto/subtle"
 	"encoding/json"
-	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -83,14 +82,14 @@ func (wh *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, err := wh.breaker.Execute(func() (interface{}, error) {
 		/* domain + secret + method validation */
 		if wh.allowedDomain != "" && r.Host != wh.allowedDomain {
-			return nil, errors.New("forbidden")
+			return nil, ErrForbidden
 		}
 		if wh.webhookSecret != "" &&
 			subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Telegram-Bot-Api-Secret-Token")), []byte(wh.webhookSecret)) != 1 {
-			return nil, errors.New("unauthorized")
+			return nil, ErrUnauthorized
 		}
 		if r.Method != http.MethodPost {
-			return nil, errors.New("method not allowed")
+			return nil, ErrMethodNotAllowed
 		}
 
 		/* pooled buffer */
@@ -101,35 +100,28 @@ func (wh *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, wh.maxBodySize)
 		n, err := io.ReadFull(r.Body, buffer)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-			return nil, err
+			return nil, &WebhookError{Code: 500, Message: "failed to read request body", Err: err}
 		}
 		defer r.Body.Close()
 
 		var upd TelegramUpdate
 		if err := json.Unmarshal(buffer[:n], &upd); err != nil {
-			return nil, err
+			return nil, &WebhookError{Code: 400, Message: "invalid JSON payload", Err: err}
 		}
 
 		select {
 		case wh.Updates <- upd:
 			wh.logger.Info("update forwarded", "update_id", upd.UpdateID)
 		default:
-			return nil, errors.New("updates channel blocked")
+			return nil, ErrChannelBlocked
 		}
 		return nil, nil
 	})
 
 	if err != nil {
-		switch err.Error() {
-		case "forbidden":
-			wh.fail(w, err.Error(), http.StatusForbidden)
-		case "unauthorized":
-			wh.fail(w, err.Error(), http.StatusUnauthorized)
-		case "method not allowed":
-			wh.fail(w, err.Error(), http.StatusMethodNotAllowed)
-		case "updates channel blocked":
-			wh.fail(w, err.Error(), http.StatusServiceUnavailable)
-		default:
+		if whErr, ok := err.(*WebhookError); ok {
+			wh.fail(w, whErr.Message, whErr.Code)
+		} else {
 			wh.fail(w, err.Error(), http.StatusInternalServerError)
 		}
 		return

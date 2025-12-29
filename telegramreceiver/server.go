@@ -7,9 +7,24 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
+// ServerState tracks the shutdown state for health endpoints.
+type ServerState struct {
+	isShuttingDown atomic.Bool
+}
+
+// IsShuttingDown returns true if the server is in shutdown mode.
+func (s *ServerState) IsShuttingDown() bool {
+	return s.isShuttingDown.Load()
+}
+
+// StartWebhookServer starts the HTTPS webhook server with Kubernetes-aware
+// graceful shutdown. It wraps the handler with health endpoints:
+//   - /healthz - liveness probe (always 200 unless shutting down)
+//   - /readyz  - readiness probe (503 during shutdown drain)
 func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, logger *slog.Logger) error {
 	if err := validateConfig(cfg); err != nil {
 		logger.Error("Configuration validation failed", "error", err)
@@ -21,9 +36,31 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 		return err
 	}
 
+	state := &ServerState{}
+
+	// Wrap handler with health endpoints
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if state.isShuttingDown.Load() {
+			http.Error(w, "shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if state.isShuttingDown.Load() {
+			http.Error(w, "shutting down", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
+	mux.Handle("/", handler)
+
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.WebhookPort),
-		Handler:           handler,
+		Handler:           mux,
 		ReadTimeout:       cfg.ReadTimeout,
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 		WriteTimeout:      cfg.WriteTimeout,
@@ -31,6 +68,10 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 		MaxHeaderBytes:    1 << 20, // 1 MB
 		TLSConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
+			CurvePreferences: []tls.CurveID{
+				tls.X25519,    // Fast, secure, preferred
+				tls.CurveP256, // Wide compatibility fallback
+			},
 		},
 	}
 
@@ -42,9 +83,20 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 	}()
 
 	<-ctx.Done()
-	logger.Info("Shutting down webhook server")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	// Kubernetes-aware shutdown sequence:
+	// 1. Mark as shutting down (health endpoints return 503)
+	// 2. Wait for drain delay (allows LB to stop routing new requests)
+	// 3. Gracefully shutdown (drain existing connections)
+	state.isShuttingDown.Store(true)
+	logger.Info("Shutdown initiated, starting drain delay", "delay", cfg.DrainDelay)
+
+	time.Sleep(cfg.DrainDelay)
+
+	logger.Info("Drain delay complete, shutting down server")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
+
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("Graceful shutdown failed", "error", err)
 		return err

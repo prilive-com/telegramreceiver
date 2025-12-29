@@ -4,30 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-**telegramreceiver v2** is a production-ready Go library for receiving Telegram bot webhook updates with resilience features: rate limiting (golang.org/x/time/rate), circuit breaker (sony/gobreaker), and graceful shutdown.
+**telegramreceiver v2** is a production-ready Go 1.25+ library for receiving Telegram bot webhook updates with resilience features: rate limiting (golang.org/x/time/rate), circuit breaker (sony/gobreaker), Kubernetes-aware graceful shutdown, and typed errors.
+
+**Import path**: `github.com/prilive-com/telegramreceiver/v2/telegramreceiver`
 
 ## Build Commands
 
 ```bash
-# Build the library and example
+# Build
 go build ./...
 
 # Run tests
 go test -v ./...
 
-# Format code
-go fmt ./...
+# Run single test
+go test -v ./telegramreceiver -run TestFunctionName
 
-# Lint (go vet)
-go vet ./...
+# Format and lint
+go fmt ./... && go vet ./...
 
-# Run the example (requires TLS certs and env vars)
+# Run example (requires TLS certs and env vars)
 go run example/main.go
-
-# Docker
-docker compose build
-docker compose up -d
-docker compose logs -f
 ```
 
 ## Architecture
@@ -38,16 +35,17 @@ docker compose logs -f
 └────────┘            │  - rate limiter │             │ (typed msgs) │
                       │  - circuit break│             └──────────────┘
                       │  - body limit   │
+                      │  - health probes│
                       └─────────────────┘
 ```
 
-**Key files:**
-- `telegramreceiver/telegram_api.go` - WebhookHandler with resilience patterns
-- `telegramreceiver/types.go` - Typed Telegram structs (Message, User, Chat, etc.)
-- `telegramreceiver/config.go` - Environment variable configuration
-- `telegramreceiver/server.go` - HTTPS server with graceful shutdown
-- `telegramreceiver/logger.go` - JSON structured logging (log/slog)
-- `telegramreceiver/helpers.go` - Utilities
+**Key components:**
+- `telegram_api.go` - WebhookHandler implementing http.Handler with rate limiting, circuit breaker, and constant-time secret validation
+- `types.go` - Typed Telegram structs (TelegramUpdate, Message, User, Chat, CallbackQuery)
+- `errors.go` - Typed WebhookError with HTTP status codes (ErrForbidden, ErrUnauthorized, etc.)
+- `config.go` - LoadConfig() reads all settings from environment variables
+- `server.go` - StartWebhookServer() with TLS 1.2+, health endpoints (/healthz, /readyz), and Kubernetes-aware graceful shutdown
+- `logger.go` - NewLogger() with JSON output and SecretToken type for log redaction
 
 ## Public API
 
@@ -82,61 +80,67 @@ for update := range updates {
 }
 ```
 
-## Typed Structs (v2)
+## Required Environment Variables
 
-v2 provides fully typed structs instead of `json.RawMessage`:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TLS_CERT_PATH` | *(required)* | Path to TLS certificate |
+| `TLS_KEY_PATH` | *(required)* | Path to TLS private key |
+| `WEBHOOK_PORT` | `8443` | HTTPS listen port |
+| `WEBHOOK_SECRET` | - | Telegram secret token (validated via constant-time compare) |
+| `DRAIN_DELAY` | `5s` | Time to wait for LB to stop routing before shutdown |
+| `SHUTDOWN_TIMEOUT` | `15s` | Max time for graceful shutdown |
 
-- `TelegramUpdate` - UpdateID, Message, EditedMessage, CallbackQuery
-- `Message` - MessageID, From, Chat, Date, Text, Photo, Document, Caption, etc.
-- `User` - ID, IsBot, FirstName, LastName, Username, LanguageCode
-- `Chat` - ID, Type, Title, Username
-- `CallbackQuery` - ID, From, Message, Data
-- `PhotoSize`, `Document`, `Contact`, `Location`, `MessageEntity`
+See README.md for full list including rate limiting and circuit breaker settings.
 
-## Environment Variables
+## Key Patterns
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `TLS_CERT_PATH` | Yes | - | Path to TLS certificate |
-| `TLS_KEY_PATH` | Yes | - | Path to TLS private key |
-| `WEBHOOK_PORT` | No | `8443` | HTTPS listen port |
-| `WEBHOOK_SECRET` | No | - | Telegram secret token |
-| `LOG_FILE_PATH` | No | `logs/telegramreceiver.log` | Log file path |
+### Kubernetes-aware graceful shutdown
+```go
+// Server exposes /healthz and /readyz endpoints
+// Shutdown sequence:
+// 1. Context cancelled → health endpoints return 503
+// 2. Drain delay (DRAIN_DELAY) → allows LB to stop routing
+// 3. Graceful shutdown (SHUTDOWN_TIMEOUT) → drains connections
+```
 
-See README.md for full list of configuration options.
+### Typed errors
+```go
+// errors.go provides typed errors with HTTP status codes
+var (
+    ErrForbidden        = &WebhookError{Code: 403, Message: "forbidden"}
+    ErrUnauthorized     = &WebhookError{Code: 401, Message: "unauthorized"}
+    ErrMethodNotAllowed = &WebhookError{Code: 405, Message: "method not allowed"}
+    ErrChannelBlocked   = &WebhookError{Code: 503, Message: "updates channel blocked"}
+)
+```
 
-## Update Types Handled
-
-| Type | Access | Description |
-|------|--------|-------------|
-| Text message | `update.Message.Text` | Plain text messages |
-| Photo | `update.Message.Photo` | Array of PhotoSize |
-| Document | `update.Message.Document` | File attachments |
-| Callback | `update.CallbackQuery.Data` | Inline button clicks |
-| Contact | `update.Message.Contact` | Shared contacts |
-| Location | `update.Message.Location` | Shared locations |
-
-## Common Patterns
+### Sensitive token redaction in logs
+```go
+// SecretToken automatically redacts itself in slog output
+token := telegramreceiver.SecretToken("my-api-key")
+logger.Info("config loaded", "token", token)
+// Output: {"token": "[REDACTED]"}
+```
 
 ### Nil-safe message handling
 ```go
 if update.Message != nil && update.Message.From != nil {
-    // Safe to access From fields
+    userID := update.Message.From.ID  // int64
 }
 ```
 
-### Command detection
-```go
-if update.Message != nil && strings.HasPrefix(update.Message.Text, "/") {
-    // Handle command
-}
-```
+## Resilience Features
 
-### Photo handling
-```go
-if len(update.Message.Photo) > 0 {
-    // Largest size is last in array
-    largest := update.Message.Photo[len(update.Message.Photo)-1]
-    fileID := largest.FileID
-}
-```
+- **Rate limiter**: `golang.org/x/time/rate` - configurable requests/second and burst
+- **Circuit breaker**: `sony/gobreaker` - prevents cascading failures
+- **Body size limit**: `http.MaxBytesReader` - guards against large payloads
+- **Buffer pool**: `sync.Pool` - reduces allocations in hot path
+- **Health probes**: `/healthz` and `/readyz` for Kubernetes liveness/readiness
+- **TLS hardening**: X25519 + P256 curve preferences, TLS 1.2+ minimum
+
+## Go 1.25 Features Used
+
+- `sync.WaitGroup.Go` - cleaner goroutine spawning in tests
+- Container-aware `GOMAXPROCS` - automatic tuning in Kubernetes
+- SHA-1 disabled in TLS 1.2 handshakes by default

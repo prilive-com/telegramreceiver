@@ -12,19 +12,19 @@ type TelegramUpdate struct {
 // Message represents a Telegram message.
 // See https://core.telegram.org/bots/api#message
 type Message struct {
-	MessageID       int              `json:"message_id"`
-	From            *User            `json:"from,omitempty"`
-	Chat            *Chat            `json:"chat"`
-	Date            int              `json:"date"`
-	Text            string           `json:"text,omitempty"`
-	ReplyToMessage  *Message         `json:"reply_to_message,omitempty"`
-	Entities        []MessageEntity  `json:"entities,omitempty"`
-	Photo           []PhotoSize      `json:"photo,omitempty"`
-	Document        *Document        `json:"document,omitempty"`
-	Caption         string           `json:"caption,omitempty"`
-	CaptionEntities []MessageEntity  `json:"caption_entities,omitempty"`
-	Contact         *Contact         `json:"contact,omitempty"`
-	Location        *Location        `json:"location,omitempty"`
+	MessageID       int             `json:"message_id"`
+	From            *User           `json:"from,omitempty"`
+	Chat            *Chat           `json:"chat"`
+	Date            int             `json:"date"`
+	Text            string          `json:"text,omitempty"`
+	ReplyToMessage  *Message        `json:"reply_to_message,omitempty"`
+	Entities        []MessageEntity `json:"entities,omitempty"`
+	Photo           []PhotoSize     `json:"photo,omitempty"`
+	Document        *Document       `json:"document,omitempty"`
+	Caption         string          `json:"caption,omitempty"`
+	CaptionEntities []MessageEntity `json:"caption_entities,omitempty"`
+	Contact         *Contact        `json:"contact,omitempty"`
+	Location        *Location       `json:"location,omitempty"`
 }
 
 // User represents a Telegram user or bot.

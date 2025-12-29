@@ -23,6 +23,9 @@ type Config struct {
 	BreakerMaxRequests uint32
 	BreakerInterval    time.Duration
 	BreakerTimeout     time.Duration
+	// Kubernetes-aware shutdown settings
+	DrainDelay      time.Duration // Time to wait for LB to stop routing before shutdown
+	ShutdownTimeout time.Duration // Max time for graceful shutdown
 }
 
 func LoadConfig() (*Config, error) {
@@ -81,6 +84,16 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	drainDelay, err := time.ParseDuration(getEnv("DRAIN_DELAY", "5s"))
+	if err != nil {
+		return nil, err
+	}
+
+	shutdownTimeout, err := time.ParseDuration(getEnv("SHUTDOWN_TIMEOUT", "15s"))
+	if err != nil {
+		return nil, err
+	}
+
 	return &Config{
 		WebhookPort:        webhookPort,
 		TLSCertPath:        getEnv("TLS_CERT_PATH", ""),
@@ -98,6 +111,8 @@ func LoadConfig() (*Config, error) {
 		BreakerMaxRequests: uint32(breakerMaxRequests),
 		BreakerInterval:    breakerInterval,
 		BreakerTimeout:     breakerTimeout,
+		DrainDelay:         drainDelay,
+		ShutdownTimeout:    shutdownTimeout,
 	}, nil
 }
 

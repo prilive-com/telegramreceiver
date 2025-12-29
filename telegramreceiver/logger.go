@@ -7,6 +7,15 @@ import (
 	"path/filepath"
 )
 
+// SecretToken is a string type that redacts itself in logs.
+// Use this for sensitive values like API tokens or secrets.
+type SecretToken string
+
+// LogValue implements slog.LogValuer to redact sensitive tokens in logs.
+func (SecretToken) LogValue() slog.Value {
+	return slog.StringValue("[REDACTED]")
+}
+
 // NewLogger creates a production-ready structured logger using Go's built-in log/slog.
 // Logs are output in JSON format to stdout and optionally to a log file.
 func NewLogger(logLevel slog.Level, logFilePath string) (*slog.Logger, error) {
