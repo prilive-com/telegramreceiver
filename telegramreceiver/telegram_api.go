@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sony/gobreaker"
+	"github.com/sony/gobreaker/v2"
 	"golang.org/x/time/rate"
 )
 
@@ -22,7 +22,7 @@ type WebhookHandler struct {
 
 	Updates     chan TelegramUpdate
 	limiter     *rate.Limiter
-	breaker     *gobreaker.CircuitBreaker
+	breaker     *gobreaker.CircuitBreaker[any]
 	bufferPool  sync.Pool
 	maxBodySize int64
 }
@@ -58,7 +58,7 @@ func NewWebhookHandler(
 		allowedDomain: allowedDomain,
 		Updates:       updates,
 		limiter:       rate.NewLimiter(rate.Limit(rateLimitReq), rateLimitBurst),
-		breaker:       gobreaker.NewCircuitBreaker(cbSettings),
+		breaker:       gobreaker.NewCircuitBreaker[any](cbSettings),
 		maxBodySize:   maxBodySize,
 		bufferPool: sync.Pool{
 			New: func() interface{} {

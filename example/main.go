@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	// Setup context clearly for graceful shutdown
+	// Setup context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -21,13 +21,13 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	// Load configuration clearly from environment variables
+	// Load configuration from environment variables
 	cfg, err := telegramreceiver.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Setup structured logging clearly
+	// Setup structured logging
 	logger, err := telegramreceiver.NewLogger(slog.LevelInfo, cfg.LogFilePath)
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
@@ -36,32 +36,48 @@ func main() {
 	// Channel for receiving Telegram updates
 	updatesChan := make(chan telegramreceiver.TelegramUpdate, 100)
 
-	// WebhookHandler initialization
-	webhookHandler := telegramreceiver.NewWebhookHandler(
-		logger,
-		cfg.WebhookSecret,
-		cfg.AllowedDomain,
-		updatesChan,
+	// Start the appropriate receiver based on mode
+	var pollingClient *telegramreceiver.LongPollingClient
 
-		cfg.RateLimitRequests,
-		cfg.RateLimitBurst,
-		cfg.MaxBodySize,
+	switch cfg.ReceiverMode {
+	case telegramreceiver.ModeWebhook:
+		logger.Info("Starting in webhook mode")
+		webhookHandler := telegramreceiver.NewWebhookHandler(
+			logger,
+			cfg.WebhookSecret,
+			cfg.AllowedDomain,
+			updatesChan,
+			cfg.RateLimitRequests,
+			cfg.RateLimitBurst,
+			cfg.MaxBodySize,
+			cfg.BreakerMaxRequests,
+			cfg.BreakerInterval,
+			cfg.BreakerTimeout,
+		)
 
-		cfg.BreakerMaxRequests,
-		cfg.BreakerInterval,
-		cfg.BreakerTimeout,
+		go func() {
+			if err := telegramreceiver.StartWebhookServer(ctx, cfg, webhookHandler, logger); err != nil {
+				logger.Error("Webhook server exited with error", "error", err)
+			}
+		}()
+
+	case telegramreceiver.ModeLongPolling:
+		logger.Info("Starting in long polling mode")
+		pollingClient, err = telegramreceiver.StartLongPolling(ctx, cfg, updatesChan, logger)
+		if err != nil {
+			log.Fatalf("Failed to start long polling: %v", err)
+		}
+		defer pollingClient.Stop()
+
+	default:
+		log.Fatalf("Unknown receiver mode: %s", cfg.ReceiverMode)
+	}
+
+	logger.Info("Telegram receiver running. Press Ctrl+C to stop.",
+		"mode", cfg.ReceiverMode,
 	)
 
-	// Start HTTPS server clearly in background
-	go func() {
-		if err := telegramreceiver.StartWebhookServer(ctx, cfg, webhookHandler, logger); err != nil {
-			logger.Error("Webhook server exited with error", "error", err)
-		}
-	}()
-
-	logger.Info("Example Telegram receiver running. Press Ctrl+C to stop.")
-
-	// Consume and pretty-print updates
+	// Consume and print updates
 	for {
 		select {
 		case update := <-updatesChan:
@@ -70,6 +86,9 @@ func main() {
 		case sig := <-sigChan:
 			logger.Info("Received shutdown signal", "signal", sig)
 			cancel()
+			if pollingClient != nil {
+				pollingClient.Stop()
+			}
 			return
 		}
 	}

@@ -15,33 +15,56 @@ func TestValidateConfig(t *testing.T) {
 		errMsg  string
 	}{
 		{
-			name: "valid config",
+			name: "valid webhook config",
 			cfg: &Config{
-				WebhookPort: 8443,
-				TLSCertPath: "/path/to/cert.pem",
-				TLSKeyPath:  "/path/to/key.pem",
-				LogFilePath: "logs/test.log",
+				ReceiverMode: ModeWebhook,
+				WebhookPort:  8443,
+				TLSCertPath:  "/path/to/cert.pem",
+				TLSKeyPath:   "/path/to/key.pem",
+				LogFilePath:  "logs/test.log",
 			},
 			wantErr: false,
 		},
 		{
-			name: "port too low",
+			name: "valid long polling config",
 			cfg: &Config{
-				WebhookPort: 0,
-				TLSCertPath: "/path/to/cert.pem",
-				TLSKeyPath:  "/path/to/key.pem",
-				LogFilePath: "logs/test.log",
+				ReceiverMode:   ModeLongPolling,
+				BotToken:       SecretToken("test-token"),
+				LogFilePath:    "logs/test.log",
+				PollingTimeout: 30,
+				PollingLimit:   100,
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid receiver mode",
+			cfg: &Config{
+				ReceiverMode: "invalid",
+				LogFilePath:  "logs/test.log",
+			},
+			wantErr: true,
+			errMsg:  "RECEIVER_MODE must be 'webhook' or 'longpolling'",
+		},
+		{
+			name: "webhook port too low",
+			cfg: &Config{
+				ReceiverMode: ModeWebhook,
+				WebhookPort:  0,
+				TLSCertPath:  "/path/to/cert.pem",
+				TLSKeyPath:   "/path/to/key.pem",
+				LogFilePath:  "logs/test.log",
 			},
 			wantErr: true,
 			errMsg:  "WebhookPort must be 1-65535",
 		},
 		{
-			name: "port too high",
+			name: "webhook port too high",
 			cfg: &Config{
-				WebhookPort: 70000,
-				TLSCertPath: "/path/to/cert.pem",
-				TLSKeyPath:  "/path/to/key.pem",
-				LogFilePath: "logs/test.log",
+				ReceiverMode: ModeWebhook,
+				WebhookPort:  70000,
+				TLSCertPath:  "/path/to/cert.pem",
+				TLSKeyPath:   "/path/to/key.pem",
+				LogFilePath:  "logs/test.log",
 			},
 			wantErr: true,
 			errMsg:  "WebhookPort must be 1-65535",
@@ -49,35 +72,73 @@ func TestValidateConfig(t *testing.T) {
 		{
 			name: "missing TLS cert path",
 			cfg: &Config{
-				WebhookPort: 8443,
-				TLSCertPath: "",
-				TLSKeyPath:  "/path/to/key.pem",
-				LogFilePath: "logs/test.log",
+				ReceiverMode: ModeWebhook,
+				WebhookPort:  8443,
+				TLSCertPath:  "",
+				TLSKeyPath:   "/path/to/key.pem",
+				LogFilePath:  "logs/test.log",
 			},
 			wantErr: true,
-			errMsg:  "TLS_CERT_PATH and TLS_KEY_PATH must be set",
+			errMsg:  "TLS_CERT_PATH and TLS_KEY_PATH must be set for webhook mode",
 		},
 		{
 			name: "missing TLS key path",
 			cfg: &Config{
-				WebhookPort: 8443,
-				TLSCertPath: "/path/to/cert.pem",
-				TLSKeyPath:  "",
-				LogFilePath: "logs/test.log",
+				ReceiverMode: ModeWebhook,
+				WebhookPort:  8443,
+				TLSCertPath:  "/path/to/cert.pem",
+				TLSKeyPath:   "",
+				LogFilePath:  "logs/test.log",
 			},
 			wantErr: true,
-			errMsg:  "TLS_CERT_PATH and TLS_KEY_PATH must be set",
+			errMsg:  "TLS_CERT_PATH and TLS_KEY_PATH must be set for webhook mode",
 		},
 		{
 			name: "missing log file path",
 			cfg: &Config{
-				WebhookPort: 8443,
-				TLSCertPath: "/path/to/cert.pem",
-				TLSKeyPath:  "/path/to/key.pem",
-				LogFilePath: "",
+				ReceiverMode: ModeWebhook,
+				WebhookPort:  8443,
+				TLSCertPath:  "/path/to/cert.pem",
+				TLSKeyPath:   "/path/to/key.pem",
+				LogFilePath:  "",
 			},
 			wantErr: true,
 			errMsg:  "LOG_FILE_PATH must be set",
+		},
+		{
+			name: "long polling missing bot token",
+			cfg: &Config{
+				ReceiverMode:   ModeLongPolling,
+				LogFilePath:    "logs/test.log",
+				PollingTimeout: 30,
+				PollingLimit:   100,
+			},
+			wantErr: true,
+			errMsg:  "TELEGRAM_BOT_TOKEN is required for long polling mode",
+		},
+		{
+			name: "long polling invalid timeout",
+			cfg: &Config{
+				ReceiverMode:   ModeLongPolling,
+				BotToken:       SecretToken("test-token"),
+				LogFilePath:    "logs/test.log",
+				PollingTimeout: 100,
+				PollingLimit:   100,
+			},
+			wantErr: true,
+			errMsg:  "POLLING_TIMEOUT must be between 0 and 60",
+		},
+		{
+			name: "long polling invalid limit",
+			cfg: &Config{
+				ReceiverMode:   ModeLongPolling,
+				BotToken:       SecretToken("test-token"),
+				LogFilePath:    "logs/test.log",
+				PollingTimeout: 30,
+				PollingLimit:   0,
+			},
+			wantErr: true,
+			errMsg:  "POLLING_LIMIT must be between 1 and 100",
 		},
 	}
 
@@ -134,6 +195,7 @@ func TestEnsureLogPath(t *testing.T) {
 
 func TestConfig_FullDefaults(t *testing.T) {
 	cfg := &Config{
+		ReceiverMode:       ModeWebhook,
 		WebhookPort:        8443,
 		TLSCertPath:        "/cert.pem",
 		TLSKeyPath:         "/key.pem",
@@ -154,5 +216,23 @@ func TestConfig_FullDefaults(t *testing.T) {
 
 	if err := validateConfig(cfg); err != nil {
 		t.Errorf("validateConfig() with full defaults should not error: %v", err)
+	}
+}
+
+func TestConfig_LongPollingDefaults(t *testing.T) {
+	cfg := &Config{
+		ReceiverMode:       ModeLongPolling,
+		BotToken:           SecretToken("test-bot-token"),
+		LogFilePath:        "logs/test.log",
+		PollingTimeout:     30,
+		PollingLimit:       100,
+		PollingRetryDelay:  5 * time.Second,
+		BreakerMaxRequests: 5,
+		BreakerInterval:    2 * time.Minute,
+		BreakerTimeout:     60 * time.Second,
+	}
+
+	if err := validateConfig(cfg); err != nil {
+		t.Errorf("validateConfig() with long polling defaults should not error: %v", err)
 	}
 }

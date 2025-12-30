@@ -25,6 +25,9 @@ func (s *ServerState) IsShuttingDown() bool {
 // graceful shutdown. It wraps the handler with health endpoints:
 //   - /healthz - liveness probe (always 200 unless shutting down)
 //   - /readyz  - readiness probe (503 during shutdown drain)
+//
+// If WebhookURL and BotToken are configured, it automatically registers
+// the webhook with Telegram before starting the server.
 func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, logger *slog.Logger) error {
 	if err := validateConfig(cfg); err != nil {
 		logger.Error("Configuration validation failed", "error", err)
@@ -34,6 +37,16 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 	if err := ensureLogPath(cfg.LogFilePath); err != nil {
 		logger.Error("Failed to create log directory", "error", err)
 		return err
+	}
+
+	// Auto-register webhook if URL and bot token are provided
+	if cfg.WebhookURL != "" && cfg.BotToken.Value() != "" {
+		logger.Info("Registering webhook with Telegram", "url", cfg.WebhookURL)
+		if err := SetWebhook(ctx, cfg.BotToken, cfg.WebhookURL, cfg.WebhookSecret); err != nil {
+			logger.Error("Failed to register webhook", "error", err)
+			return fmt.Errorf("failed to register webhook: %w", err)
+		}
+		logger.Info("Webhook registered successfully")
 	}
 
 	state := &ServerState{}
@@ -103,4 +116,47 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 	}
 	logger.Info("Webhook server stopped gracefully")
 	return nil
+}
+
+// StartLongPolling creates and starts a long polling client.
+// It automatically deletes any existing webhook before starting.
+// Returns the client so the caller can call Stop() when needed.
+func StartLongPolling(ctx context.Context, cfg *Config, updates chan<- TelegramUpdate, logger *slog.Logger) (*LongPollingClient, error) {
+	if err := validateConfig(cfg); err != nil {
+		logger.Error("Configuration validation failed", "error", err)
+		return nil, err
+	}
+
+	if err := ensureLogPath(cfg.LogFilePath); err != nil {
+		logger.Error("Failed to create log directory", "error", err)
+		return nil, err
+	}
+
+	// Build options based on config
+	var opts []LongPollingOption
+	if cfg.PollingMaxErrors != defaultMaxConsecutiveErrors {
+		opts = append(opts, WithMaxErrors(cfg.PollingMaxErrors))
+	}
+	if len(cfg.AllowedUpdates) > 0 {
+		opts = append(opts, WithAllowedUpdates(cfg.AllowedUpdates))
+	}
+
+	client := NewLongPollingClient(
+		cfg.BotToken,
+		updates,
+		logger,
+		cfg.PollingTimeout,
+		cfg.PollingLimit,
+		cfg.PollingRetryDelay,
+		cfg.BreakerMaxRequests,
+		cfg.BreakerInterval,
+		cfg.BreakerTimeout,
+		opts...,
+	)
+
+	if err := client.Start(ctx); err != nil {
+		return nil, err
+	}
+
+	return client, nil
 }

@@ -1,0 +1,363 @@
+package telegramreceiver
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sony/gobreaker/v2"
+)
+
+// LongPollingClient polls Telegram's getUpdates API for new updates.
+// It automatically calls deleteWebhook before starting to ensure
+// the bot is not in webhook mode.
+type LongPollingClient struct {
+	botToken SecretToken
+	updates  chan<- TelegramUpdate
+	logger   *slog.Logger
+
+	// Polling configuration
+	timeout        int
+	limit          int
+	retryDelay     time.Duration
+	maxErrors      int      // Max consecutive errors before stopping (0 = unlimited)
+	allowedUpdates []string // Optional: filter update types
+
+	// HTTP client
+	client httpClient
+
+	// Circuit breaker for resilience
+	breaker *gobreaker.CircuitBreaker[[]byte]
+
+	// State management
+	running           atomic.Bool
+	offset            int
+	consecutiveErrors atomic.Int32 // Exposed for health checks
+	stopCh            chan struct{}
+	closeOnce         sync.Once // Prevents double-close panic
+	wg                sync.WaitGroup
+}
+
+const defaultMaxConsecutiveErrors = 10
+
+// LongPollingOption configures the LongPollingClient.
+type LongPollingOption func(*LongPollingClient)
+
+// WithHTTPClient sets a custom HTTP client for the polling client.
+func WithHTTPClient(client *http.Client) LongPollingOption {
+	return func(c *LongPollingClient) {
+		c.client = client
+	}
+}
+
+// WithCircuitBreaker sets a custom circuit breaker for the polling client.
+func WithCircuitBreaker(breaker *gobreaker.CircuitBreaker[[]byte]) LongPollingOption {
+	return func(c *LongPollingClient) {
+		c.breaker = breaker
+	}
+}
+
+// WithMaxErrors sets the maximum consecutive errors before stopping.
+// Set to 0 for unlimited retries.
+func WithMaxErrors(max int) LongPollingOption {
+	return func(c *LongPollingClient) {
+		c.maxErrors = max
+	}
+}
+
+// WithAllowedUpdates sets the update types to receive.
+// See https://core.telegram.org/bots/api#update
+func WithAllowedUpdates(types []string) LongPollingOption {
+	return func(c *LongPollingClient) {
+		c.allowedUpdates = types
+	}
+}
+
+// NewLongPollingClient creates a new long polling client.
+// The updates channel must be provided (dependency injection pattern).
+func NewLongPollingClient(
+	botToken SecretToken,
+	updates chan<- TelegramUpdate,
+	logger *slog.Logger,
+	timeout int,
+	limit int,
+	retryDelay time.Duration,
+	breakerMaxRequests uint32,
+	breakerInterval time.Duration,
+	breakerTimeout time.Duration,
+	opts ...LongPollingOption,
+) *LongPollingClient {
+	client := &LongPollingClient{
+		botToken:   botToken,
+		updates:    updates,
+		logger:     logger,
+		timeout:    timeout,
+		limit:      limit,
+		retryDelay: retryDelay,
+		maxErrors:  defaultMaxConsecutiveErrors,
+		client:     defaultPollingHTTPClient(timeout),
+		stopCh:     make(chan struct{}),
+	}
+
+	// Create default circuit breaker
+	client.breaker = gobreaker.NewCircuitBreaker[[]byte](gobreaker.Settings{
+		Name:        "telegram-polling",
+		MaxRequests: breakerMaxRequests,
+		Interval:    breakerInterval,
+		Timeout:     breakerTimeout,
+		ReadyToTrip: func(counts gobreaker.Counts) bool {
+			failureRatio := float64(counts.TotalFailures) / float64(counts.Requests)
+			return counts.Requests >= 3 && failureRatio >= 0.6
+		},
+		OnStateChange: func(name string, from gobreaker.State, to gobreaker.State) {
+			logger.Info("circuit breaker state changed",
+				"name", name,
+				"from", from.String(),
+				"to", to.String(),
+			)
+		},
+	})
+
+	// Apply options
+	for _, opt := range opts {
+		opt(client)
+	}
+
+	return client
+}
+
+// defaultPollingHTTPClient creates an HTTP client optimized for long polling.
+func defaultPollingHTTPClient(timeoutSeconds int) *http.Client {
+	// Add extra time for network overhead beyond the Telegram timeout
+	httpTimeout := time.Duration(timeoutSeconds+10) * time.Second
+
+	return &http.Client{
+		Timeout: httpTimeout,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   10,
+			IdleConnTimeout:       90 * time.Second,
+			ResponseHeaderTimeout: time.Duration(timeoutSeconds+5) * time.Second,
+			ForceAttemptHTTP2:     true,
+		},
+	}
+}
+
+// Start begins polling for updates from Telegram.
+// It automatically deletes any existing webhook before starting.
+// Returns ErrPollingAlreadyRunning if the client is already running.
+func (c *LongPollingClient) Start(ctx context.Context) error {
+	if !c.running.CompareAndSwap(false, true) {
+		return ErrPollingAlreadyRunning
+	}
+
+	// Delete any existing webhook before starting long polling
+	c.logger.Info("deleting existing webhook before starting long polling")
+	if err := DeleteWebhookWithClient(ctx, c.client, c.botToken, false); err != nil {
+		c.running.Store(false)
+		return fmt.Errorf("failed to delete webhook: %w", err)
+	}
+
+	c.wg.Add(1)
+	go c.pollLoop(ctx)
+
+	c.logger.Info("long polling started",
+		"timeout", c.timeout,
+		"limit", c.limit,
+		"max_errors", c.maxErrors,
+	)
+
+	return nil
+}
+
+// Stop gracefully stops the polling client.
+// It blocks until the polling goroutine has finished.
+// Safe to call multiple times.
+func (c *LongPollingClient) Stop() {
+	if !c.running.CompareAndSwap(true, false) {
+		return
+	}
+
+	// Use sync.Once to prevent double-close panic
+	c.closeOnce.Do(func() {
+		close(c.stopCh)
+	})
+	c.wg.Wait()
+	c.logger.Info("long polling stopped")
+}
+
+// pollLoop is the main polling loop.
+func (c *LongPollingClient) pollLoop(ctx context.Context) {
+	defer c.wg.Done()
+	defer c.running.Store(false)
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Info("polling stopped due to context cancellation")
+			return
+		case <-c.stopCh:
+			c.logger.Info("polling stopped due to stop signal")
+			return
+		default:
+		}
+
+		updates, err := c.fetchUpdates(ctx)
+		if err != nil {
+			errCount := c.consecutiveErrors.Add(1)
+			c.logger.Error("failed to fetch updates",
+				"error", err,
+				"consecutive_errors", errCount,
+			)
+
+			// Check max errors (0 = unlimited)
+			if c.maxErrors > 0 && int(errCount) >= c.maxErrors {
+				c.logger.Error("max consecutive errors exceeded, stopping polling",
+					"max_errors", c.maxErrors,
+				)
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.stopCh:
+				return
+			case <-time.After(c.retryDelay):
+				continue
+			}
+		}
+
+		c.consecutiveErrors.Store(0)
+
+		for _, update := range updates {
+			// Update offset to acknowledge this update
+			if update.UpdateID >= c.offset {
+				c.offset = update.UpdateID + 1
+			}
+
+			select {
+			case c.updates <- update:
+				c.logger.Debug("update sent to channel",
+					"update_id", update.UpdateID,
+				)
+			default:
+				c.logger.Warn("updates channel full, dropping update",
+					"update_id", update.UpdateID,
+				)
+			}
+		}
+	}
+}
+
+// getUpdatesResponse is the response from Telegram's getUpdates API.
+type getUpdatesResponse struct {
+	OK          bool             `json:"ok"`
+	Result      []TelegramUpdate `json:"result,omitempty"`
+	ErrorCode   int              `json:"error_code,omitempty"`
+	Description string           `json:"description,omitempty"`
+}
+
+// fetchUpdates calls the Telegram getUpdates API.
+func (c *LongPollingClient) fetchUpdates(ctx context.Context) ([]TelegramUpdate, error) {
+	url := fmt.Sprintf("%s%s/getUpdates?timeout=%d&limit=%d&offset=%d",
+		telegramAPIBaseURL,
+		c.botToken.Value(),
+		c.timeout,
+		c.limit,
+		c.offset,
+	)
+
+	// Add allowed_updates if configured
+	if len(c.allowedUpdates) > 0 {
+		encoded, err := json.Marshal(c.allowedUpdates)
+		if err == nil {
+			url += "&allowed_updates=" + string(encoded)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, &TelegramAPIError{Description: "failed to create request", Err: err}
+	}
+
+	// Use circuit breaker for the HTTP call
+	respBody, err := c.breaker.Execute(func() ([]byte, error) {
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			// Always drain remaining body for connection reuse
+			io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+		}()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		// Check HTTP status code
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		}
+
+		return body, nil
+	})
+
+	if err != nil {
+		return nil, &TelegramAPIError{Description: "request failed", Err: err}
+	}
+
+	var response getUpdatesResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		return nil, &TelegramAPIError{Description: "failed to parse response", Err: err}
+	}
+
+	if !response.OK {
+		return nil, &TelegramAPIError{
+			Code:        response.ErrorCode,
+			Description: response.Description,
+		}
+	}
+
+	return response.Result, nil
+}
+
+// Running returns true if the polling client is currently running.
+func (c *LongPollingClient) Running() bool {
+	return c.running.Load()
+}
+
+// IsHealthy returns health status for K8s probes.
+// Returns false if not running or too many consecutive errors.
+func (c *LongPollingClient) IsHealthy() bool {
+	if c.maxErrors == 0 {
+		// Unlimited errors mode - just check if running
+		return c.running.Load()
+	}
+	return c.running.Load() && int(c.consecutiveErrors.Load()) < c.maxErrors
+}
+
+// ConsecutiveErrors returns the current consecutive error count.
+func (c *LongPollingClient) ConsecutiveErrors() int32 {
+	return c.consecutiveErrors.Load()
+}
+
+// Offset returns the current update offset.
+func (c *LongPollingClient) Offset() int {
+	return c.offset
+}
