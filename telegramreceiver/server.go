@@ -119,7 +119,7 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 }
 
 // StartLongPolling creates and starts a long polling client.
-// It automatically deletes any existing webhook before starting.
+// If POLLING_DELETE_WEBHOOK is true, it deletes any existing webhook before starting.
 // Returns the client so the caller can call Stop() when needed.
 func StartLongPolling(ctx context.Context, cfg *Config, updates chan<- TelegramUpdate, logger *slog.Logger) (*LongPollingClient, error) {
 	if err := validateConfig(cfg); err != nil {
@@ -139,6 +139,9 @@ func StartLongPolling(ctx context.Context, cfg *Config, updates chan<- TelegramU
 	}
 	if len(cfg.AllowedUpdates) > 0 {
 		opts = append(opts, WithAllowedUpdates(cfg.AllowedUpdates))
+	}
+	if cfg.PollingDeleteWebhook {
+		opts = append(opts, WithDeleteWebhook(true))
 	}
 
 	client := NewLongPollingClient(

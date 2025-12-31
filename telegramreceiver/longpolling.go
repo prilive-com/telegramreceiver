@@ -16,19 +16,20 @@ import (
 )
 
 // LongPollingClient polls Telegram's getUpdates API for new updates.
-// It automatically calls deleteWebhook before starting to ensure
-// the bot is not in webhook mode.
+// If POLLING_DELETE_WEBHOOK is set to true, it calls deleteWebhook before starting
+// to ensure the bot is not in webhook mode.
 type LongPollingClient struct {
 	botToken SecretToken
 	updates  chan<- TelegramUpdate
 	logger   *slog.Logger
 
 	// Polling configuration
-	timeout        int
-	limit          int
-	retryDelay     time.Duration
-	maxErrors      int      // Max consecutive errors before stopping (0 = unlimited)
-	allowedUpdates []string // Optional: filter update types
+	timeout              int
+	limit                int
+	retryDelay           time.Duration
+	maxErrors            int      // Max consecutive errors before stopping (0 = unlimited)
+	allowedUpdates       []string // Optional: filter update types
+	deleteWebhookOnStart bool     // Delete existing webhook before starting
 
 	// HTTP client
 	client httpClient
@@ -77,6 +78,14 @@ func WithMaxErrors(max int) LongPollingOption {
 func WithAllowedUpdates(types []string) LongPollingOption {
 	return func(c *LongPollingClient) {
 		c.allowedUpdates = types
+	}
+}
+
+// WithDeleteWebhook configures the client to delete any existing webhook before starting.
+// Default is false - the client assumes no webhook exists or the user manages webhooks manually.
+func WithDeleteWebhook(delete bool) LongPollingOption {
+	return func(c *LongPollingClient) {
+		c.deleteWebhookOnStart = delete
 	}
 }
 
@@ -156,18 +165,20 @@ func defaultPollingHTTPClient(timeoutSeconds int) *http.Client {
 }
 
 // Start begins polling for updates from Telegram.
-// It automatically deletes any existing webhook before starting.
+// If deleteWebhookOnStart is enabled, it deletes any existing webhook before starting.
 // Returns ErrPollingAlreadyRunning if the client is already running.
 func (c *LongPollingClient) Start(ctx context.Context) error {
 	if !c.running.CompareAndSwap(false, true) {
 		return ErrPollingAlreadyRunning
 	}
 
-	// Delete any existing webhook before starting long polling
-	c.logger.Info("deleting existing webhook before starting long polling")
-	if err := DeleteWebhookWithClient(ctx, c.client, c.botToken, false); err != nil {
-		c.running.Store(false)
-		return fmt.Errorf("failed to delete webhook: %w", err)
+	// Only delete webhook if explicitly configured
+	if c.deleteWebhookOnStart {
+		c.logger.Info("deleting existing webhook before starting long polling")
+		if err := DeleteWebhookWithClient(ctx, c.client, c.botToken, false); err != nil {
+			c.running.Store(false)
+			return fmt.Errorf("failed to delete webhook: %w", err)
+		}
 	}
 
 	c.wg.Add(1)

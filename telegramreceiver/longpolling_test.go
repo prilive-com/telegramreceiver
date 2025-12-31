@@ -15,13 +15,21 @@ import (
 
 func TestLongPollingClient_Start(t *testing.T) {
 	tests := []struct {
-		name          string
-		deleteWebhook func(w http.ResponseWriter, r *http.Request)
-		wantErr       bool
-		errContains   string
+		name                 string
+		deleteWebhookEnabled bool
+		deleteWebhook        func(w http.ResponseWriter, r *http.Request)
+		wantErr              bool
+		errContains          string
 	}{
 		{
-			name: "successful start after webhook deletion",
+			name:                 "successful start without webhook deletion",
+			deleteWebhookEnabled: false,
+			deleteWebhook:        nil, // Not called
+			wantErr:              false,
+		},
+		{
+			name:                 "successful start with webhook deletion",
+			deleteWebhookEnabled: true,
 			deleteWebhook: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]any{
@@ -32,7 +40,8 @@ func TestLongPollingClient_Start(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "fails when webhook deletion fails",
+			name:                 "fails when webhook deletion fails",
+			deleteWebhookEnabled: true,
 			deleteWebhook: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusUnauthorized)
 				json.NewEncoder(w).Encode(map[string]any{
@@ -52,7 +61,9 @@ func TestLongPollingClient_Start(t *testing.T) {
 			requestCount := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(r.URL.Path, "deleteWebhook") {
-					tt.deleteWebhook(w, r)
+					if tt.deleteWebhook != nil {
+						tt.deleteWebhook(w, r)
+					}
 					return
 				}
 				if strings.Contains(r.URL.Path, "getUpdates") {
@@ -87,6 +98,7 @@ func TestLongPollingClient_Start(t *testing.T) {
 						httpClient: server.Client(),
 					},
 				}),
+				WithDeleteWebhook(tt.deleteWebhookEnabled),
 			)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

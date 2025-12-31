@@ -112,6 +112,7 @@ info, _ := telegramreceiver.GetWebhookInfo(ctx, botToken)
 | `POLLING_TIMEOUT` | `30` | Seconds to wait for updates (0-60) |
 | `POLLING_LIMIT` | `100` | Max updates per request (1-100) |
 | `POLLING_MAX_ERRORS` | `10` | Max consecutive errors before stopping (0 = unlimited) |
+| `POLLING_DELETE_WEBHOOK` | `false` | Delete existing webhook before starting |
 | `ALLOWED_UPDATES` | - | Comma-separated update types (empty = all) |
 
 See README.md for full list including rate limiting and circuit breaker settings.

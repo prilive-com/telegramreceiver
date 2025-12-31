@@ -191,7 +191,7 @@ Your server pulls updates from Telegram API. Best for:
 - NAT/firewall environments
 
 **Behavior:**
-- Automatically calls `deleteWebhook` before starting
+- If `POLLING_DELETE_WEBHOOK=true`, calls `deleteWebhook` before starting
 - Uses circuit breaker for resilience
 - Configurable retry delay and max errors
 - Provides `IsHealthy()` method for health checks
@@ -302,6 +302,12 @@ client := telegramreceiver.NewLongPollingClient(
 client := telegramreceiver.NewLongPollingClient(
     // ... required params ...
     telegramreceiver.WithAllowedUpdates([]string{"message", "callback_query"}),
+)
+
+// Delete webhook before starting (default: false)
+client := telegramreceiver.NewLongPollingClient(
+    // ... required params ...
+    telegramreceiver.WithDeleteWebhook(true),
 )
 
 // Custom circuit breaker
@@ -610,6 +616,7 @@ for update := range updates {
 | `POLLING_LIMIT` | `100` | Max updates per request (1-100) |
 | `POLLING_RETRY_DELAY` | `5s` | Delay between retries on error |
 | `POLLING_MAX_ERRORS` | `10` | Max consecutive errors before stopping (0 = unlimited) |
+| `POLLING_DELETE_WEBHOOK` | `false` | Delete existing webhook before starting |
 | `ALLOWED_UPDATES` | *(empty)* | Comma-separated update types filter |
 
 ### Common Configuration
@@ -894,7 +901,7 @@ docker compose logs -f
 | `ErrBotTokenRequired` | Missing `TELEGRAM_BOT_TOKEN` | Set the environment variable |
 | `ErrPollingAlreadyRunning` | Called `Start()` twice | Check `Running()` before starting |
 | `409 Conflict` error | Another instance using same token | Stop other bots or use webhook |
-| Updates not arriving | Webhook still registered | Library auto-deletes, but check with `GetWebhookInfo()` |
+| Updates not arriving | Webhook still registered | Set `POLLING_DELETE_WEBHOOK=true` or call `DeleteWebhook()` manually |
 | `IsHealthy()` returns false | Too many consecutive errors | Check network, bot token, or Telegram API status |
 
 ### Webhook Issues

@@ -33,11 +33,12 @@ type Config struct {
 	WebhookURL    string // Public URL for auto-registration (optional)
 
 	// Long polling configuration
-	PollingTimeout    int           // Seconds to wait for updates (0-60)
-	PollingLimit      int           // Max updates per request (1-100)
-	PollingRetryDelay time.Duration // Delay between retries on error
-	PollingMaxErrors  int           // Max consecutive errors before stopping (0 = unlimited)
-	AllowedUpdates    []string      // Filter update types (empty = all)
+	PollingTimeout       int           // Seconds to wait for updates (0-60)
+	PollingLimit         int           // Max updates per request (1-100)
+	PollingRetryDelay    time.Duration // Delay between retries on error
+	PollingMaxErrors     int           // Max consecutive errors before stopping (0 = unlimited)
+	PollingDeleteWebhook bool          // Delete existing webhook before starting (default: false)
+	AllowedUpdates       []string      // Filter update types (empty = all)
 
 	// Common configuration
 	LogFilePath        string
@@ -105,6 +106,9 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Parse polling delete webhook (default: false)
+	pollingDeleteWebhook := strings.ToLower(getEnv("POLLING_DELETE_WEBHOOK", "false")) == "true"
 
 	// Parse allowed updates (comma-separated list)
 	var allowedUpdates []string
@@ -193,11 +197,12 @@ func LoadConfig() (*Config, error) {
 		WebhookSecret:      getEnv("WEBHOOK_SECRET", ""),
 		AllowedDomain:      getEnv("ALLOWED_DOMAIN", ""),
 		WebhookURL:         webhookURL,
-		PollingTimeout:     pollingTimeout,
-		PollingLimit:       pollingLimit,
-		PollingRetryDelay:  pollingRetryDelay,
-		PollingMaxErrors:   pollingMaxErrors,
-		AllowedUpdates:     allowedUpdates,
+		PollingTimeout:       pollingTimeout,
+		PollingLimit:         pollingLimit,
+		PollingRetryDelay:    pollingRetryDelay,
+		PollingMaxErrors:     pollingMaxErrors,
+		PollingDeleteWebhook: pollingDeleteWebhook,
+		AllowedUpdates:       allowedUpdates,
 		LogFilePath:        getEnv("LOG_FILE_PATH", "logs/telegramreceiver.log"),
 		RateLimitRequests:  rateLimitRequests,
 		RateLimitBurst:     rateLimitBurst,
