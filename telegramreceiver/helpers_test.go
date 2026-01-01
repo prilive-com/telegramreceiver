@@ -7,12 +7,27 @@ import (
 	"time"
 )
 
+// getTestBotToken returns the bot token from TEST_BOT_TOKEN environment variable.
+// Skips the test if the variable is not set.
+func getTestBotToken(t *testing.T) SecretToken {
+	t.Helper()
+	token := os.Getenv("TEST_BOT_TOKEN")
+	if token == "" {
+		t.Skip("TEST_BOT_TOKEN environment variable not set")
+	}
+	return SecretToken(token)
+}
+
 func TestValidateConfig(t *testing.T) {
+	// Get bot token from environment for long polling tests
+	botToken := SecretToken(os.Getenv("TEST_BOT_TOKEN"))
+
 	tests := []struct {
-		name    string
-		cfg     *Config
-		wantErr bool
-		errMsg  string
+		name         string
+		cfg          *Config
+		wantErr      bool
+		errMsg       string
+		needsBotToken bool // Skip if TEST_BOT_TOKEN not set
 	}{
 		{
 			name: "valid webhook config",
@@ -29,12 +44,13 @@ func TestValidateConfig(t *testing.T) {
 			name: "valid long polling config",
 			cfg: &Config{
 				ReceiverMode:   ModeLongPolling,
-				BotToken:       SecretToken("test-token"),
+				BotToken:       botToken,
 				LogFilePath:    "logs/test.log",
 				PollingTimeout: 30,
 				PollingLimit:   100,
 			},
-			wantErr: false,
+			wantErr:      false,
+			needsBotToken: true,
 		},
 		{
 			name: "invalid receiver mode",
@@ -120,30 +136,37 @@ func TestValidateConfig(t *testing.T) {
 			name: "long polling invalid timeout",
 			cfg: &Config{
 				ReceiverMode:   ModeLongPolling,
-				BotToken:       SecretToken("test-token"),
+				BotToken:       botToken,
 				LogFilePath:    "logs/test.log",
 				PollingTimeout: 100,
 				PollingLimit:   100,
 			},
-			wantErr: true,
-			errMsg:  "POLLING_TIMEOUT must be between 0 and 60",
+			wantErr:       true,
+			errMsg:        "POLLING_TIMEOUT must be between 0 and 60",
+			needsBotToken: true,
 		},
 		{
 			name: "long polling invalid limit",
 			cfg: &Config{
 				ReceiverMode:   ModeLongPolling,
-				BotToken:       SecretToken("test-token"),
+				BotToken:       botToken,
 				LogFilePath:    "logs/test.log",
 				PollingTimeout: 30,
 				PollingLimit:   0,
 			},
-			wantErr: true,
-			errMsg:  "POLLING_LIMIT must be between 1 and 100",
+			wantErr:       true,
+			errMsg:        "POLLING_LIMIT must be between 1 and 100",
+			needsBotToken: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Skip tests that need bot token if not set
+			if tt.needsBotToken && botToken.Value() == "" {
+				t.Skip("TEST_BOT_TOKEN environment variable not set")
+			}
+
 			err := validateConfig(tt.cfg)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateConfig() error = %v, wantErr %v", err, tt.wantErr)
@@ -220,16 +243,20 @@ func TestConfig_FullDefaults(t *testing.T) {
 }
 
 func TestConfig_LongPollingDefaults(t *testing.T) {
+	botToken := getTestBotToken(t)
+
 	cfg := &Config{
-		ReceiverMode:       ModeLongPolling,
-		BotToken:           SecretToken("test-bot-token"),
-		LogFilePath:        "logs/test.log",
-		PollingTimeout:     30,
-		PollingLimit:       100,
-		PollingRetryDelay:  5 * time.Second,
-		BreakerMaxRequests: 5,
-		BreakerInterval:    2 * time.Minute,
-		BreakerTimeout:     60 * time.Second,
+		ReceiverMode:              ModeLongPolling,
+		BotToken:                  botToken,
+		LogFilePath:               "logs/test.log",
+		PollingTimeout:            30,
+		PollingLimit:              100,
+		PollingRetryInitialDelay:  time.Second,
+		PollingRetryMaxDelay:      60 * time.Second,
+		PollingRetryBackoffFactor: 2.0,
+		BreakerMaxRequests:        5,
+		BreakerInterval:           2 * time.Minute,
+		BreakerTimeout:            60 * time.Second,
 	}
 
 	if err := validateConfig(cfg); err != nil {

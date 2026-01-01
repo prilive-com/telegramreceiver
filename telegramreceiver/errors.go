@@ -3,6 +3,7 @@ package telegramreceiver
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // WebhookError represents an error with an associated HTTP status code.
@@ -21,6 +22,16 @@ func (e *WebhookError) Error() string {
 
 func (e *WebhookError) Unwrap() error {
 	return e.Err
+}
+
+// Is implements errors.Is for WebhookError.
+// Two WebhookErrors are equal if they have the same Code.
+func (e *WebhookError) Is(target error) bool {
+	t, ok := target.(*WebhookError)
+	if !ok {
+		return false
+	}
+	return e.Code == t.Code
 }
 
 // Sentinel errors for webhook handler.
@@ -53,12 +64,16 @@ var (
 type TelegramAPIError struct {
 	Code        int
 	Description string
+	RetryAfter  time.Duration
 	Err         error
 }
 
 func (e *TelegramAPIError) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("telegram API error [%d]: %s: %v", e.Code, e.Description, e.Err)
+	}
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("telegram API error [%d]: %s (retry after %v)", e.Code, e.Description, e.RetryAfter)
 	}
 	if e.Code != 0 {
 		return fmt.Sprintf("telegram API error [%d]: %s", e.Code, e.Description)
@@ -68,4 +83,32 @@ func (e *TelegramAPIError) Error() string {
 
 func (e *TelegramAPIError) Unwrap() error {
 	return e.Err
+}
+
+// Is implements errors.Is for TelegramAPIError.
+// Two TelegramAPIErrors are equal if they have the same Code.
+func (e *TelegramAPIError) Is(target error) bool {
+	t, ok := target.(*TelegramAPIError)
+	if !ok {
+		return false
+	}
+	return e.Code == t.Code
+}
+
+// IsRetryable returns true if the error indicates a temporary condition
+// that may succeed on retry.
+func (e *TelegramAPIError) IsRetryable() bool {
+	// 429 - Too Many Requests
+	// 500, 502, 503, 504 - Server errors
+	return e.Code == 429 || (e.Code >= 500 && e.Code <= 504)
+}
+
+// NewTelegramAPIError creates a new TelegramAPIError.
+func NewTelegramAPIError(code int, description string) *TelegramAPIError {
+	return &TelegramAPIError{Code: code, Description: description}
+}
+
+// NewTelegramAPIErrorWithRetry creates a new TelegramAPIError with retry information.
+func NewTelegramAPIErrorWithRetry(code int, description string, retryAfter time.Duration) *TelegramAPIError {
+	return &TelegramAPIError{Code: code, Description: description, RetryAfter: retryAfter}
 }

@@ -33,12 +33,14 @@ type Config struct {
 	WebhookURL    string // Public URL for auto-registration (optional)
 
 	// Long polling configuration
-	PollingTimeout       int           // Seconds to wait for updates (0-60)
-	PollingLimit         int           // Max updates per request (1-100)
-	PollingRetryDelay    time.Duration // Delay between retries on error
-	PollingMaxErrors     int           // Max consecutive errors before stopping (0 = unlimited)
-	PollingDeleteWebhook bool          // Delete existing webhook before starting (default: false)
-	AllowedUpdates       []string      // Filter update types (empty = all)
+	PollingTimeout            int           // Seconds to wait for updates (0-60)
+	PollingLimit              int           // Max updates per request (1-100)
+	PollingMaxErrors          int           // Max consecutive errors before stopping (0 = unlimited)
+	PollingDeleteWebhook      bool          // Delete existing webhook before starting (default: false)
+	AllowedUpdates            []string      // Filter update types (empty = all)
+	PollingRetryInitialDelay  time.Duration // Initial delay before first retry (default: 1s)
+	PollingRetryMaxDelay      time.Duration // Maximum delay cap (default: 60s)
+	PollingRetryBackoffFactor float64       // Multiplier for each retry (default: 2.0)
 
 	// Common configuration
 	LogFilePath        string
@@ -95,12 +97,6 @@ func LoadConfig() (*Config, error) {
 		return nil, ErrInvalidPollingLimit
 	}
 
-	// Parse polling retry delay
-	pollingRetryDelay, err := time.ParseDuration(getEnv("POLLING_RETRY_DELAY", "5s"))
-	if err != nil {
-		return nil, err
-	}
-
 	// Parse polling max errors (0 = unlimited)
 	pollingMaxErrors, err := strconv.Atoi(getEnv("POLLING_MAX_ERRORS", "10"))
 	if err != nil {
@@ -120,6 +116,22 @@ func LoadConfig() (*Config, error) {
 				allowedUpdates = append(allowedUpdates, trimmed)
 			}
 		}
+	}
+
+	// Parse retry configuration for exponential backoff
+	pollingRetryInitialDelay, err := time.ParseDuration(getEnv("POLLING_RETRY_INITIAL_DELAY", "1s"))
+	if err != nil {
+		return nil, err
+	}
+
+	pollingRetryMaxDelay, err := time.ParseDuration(getEnv("POLLING_RETRY_MAX_DELAY", "60s"))
+	if err != nil {
+		return nil, err
+	}
+
+	pollingRetryBackoffFactor, err := strconv.ParseFloat(getEnv("POLLING_RETRY_BACKOFF_FACTOR", "2.0"), 64)
+	if err != nil {
+		return nil, err
 	}
 
 	// Parse webhook URL (validate if provided)
@@ -197,12 +209,14 @@ func LoadConfig() (*Config, error) {
 		WebhookSecret:      getEnv("WEBHOOK_SECRET", ""),
 		AllowedDomain:      getEnv("ALLOWED_DOMAIN", ""),
 		WebhookURL:         webhookURL,
-		PollingTimeout:       pollingTimeout,
-		PollingLimit:         pollingLimit,
-		PollingRetryDelay:    pollingRetryDelay,
-		PollingMaxErrors:     pollingMaxErrors,
-		PollingDeleteWebhook: pollingDeleteWebhook,
-		AllowedUpdates:       allowedUpdates,
+		PollingTimeout:            pollingTimeout,
+		PollingLimit:              pollingLimit,
+		PollingMaxErrors:          pollingMaxErrors,
+		PollingDeleteWebhook:      pollingDeleteWebhook,
+		AllowedUpdates:            allowedUpdates,
+		PollingRetryInitialDelay:  pollingRetryInitialDelay,
+		PollingRetryMaxDelay:      pollingRetryMaxDelay,
+		PollingRetryBackoffFactor: pollingRetryBackoffFactor,
 		LogFilePath:        getEnv("LOG_FILE_PATH", "logs/telegramreceiver.log"),
 		RateLimitRequests:  rateLimitRequests,
 		RateLimitBurst:     rateLimitBurst,

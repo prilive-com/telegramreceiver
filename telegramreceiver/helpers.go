@@ -2,15 +2,9 @@ package telegramreceiver
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
+	"strconv"
+	"strings"
 )
-
-// ensureLogPath creates all parent directories for the log file.
-func ensureLogPath(path string) error {
-	dir := filepath.Dir(path)
-	return os.MkdirAll(dir, 0o755)
-}
 
 // validateConfig performs pre-flight sanity checks based on receiver mode.
 func validateConfig(cfg *Config) error {
@@ -46,11 +40,45 @@ func validatePollingConfig(cfg *Config) error {
 	if cfg.BotToken.Value() == "" {
 		return ErrBotTokenRequired
 	}
+	if err := ValidateBotToken(cfg.BotToken); err != nil {
+		return err
+	}
 	if cfg.PollingTimeout < 0 || cfg.PollingTimeout > 60 {
 		return ErrInvalidPollingTimeout
 	}
 	if cfg.PollingLimit < 1 || cfg.PollingLimit > 100 {
 		return ErrInvalidPollingLimit
 	}
+	return nil
+}
+
+// ValidateBotToken validates that the bot token has the correct format.
+// Telegram bot tokens follow the pattern: 123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ
+func ValidateBotToken(token SecretToken) error {
+	t := token.Value()
+
+	if len(t) < 10 {
+		return errors.New("bot token: too short")
+	}
+
+	if !strings.Contains(t, ":") {
+		return errors.New("bot token: must contain colon separator")
+	}
+
+	parts := strings.Split(t, ":")
+	if len(parts) != 2 {
+		return errors.New("bot token: must contain exactly one colon")
+	}
+
+	// First part must be a number (bot ID)
+	if _, err := strconv.ParseInt(parts[0], 10, 64); err != nil {
+		return errors.New("bot token: bot ID must be numeric")
+	}
+
+	// Second part should be at least 30 chars (the actual token hash)
+	if len(parts[1]) < 30 {
+		return errors.New("bot token: token hash too short")
+	}
+
 	return nil
 }

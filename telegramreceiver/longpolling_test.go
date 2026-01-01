@@ -87,7 +87,6 @@ func TestLongPollingClient_Start(t *testing.T) {
 				logger,
 				1, // short timeout for tests
 				10,
-				100*time.Millisecond,
 				5,
 				time.Minute,
 				time.Minute,
@@ -99,6 +98,7 @@ func TestLongPollingClient_Start(t *testing.T) {
 					},
 				}),
 				WithDeleteWebhook(tt.deleteWebhookEnabled),
+				WithRetryConfig(100*time.Millisecond, time.Second, 2.0),
 			)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -148,7 +148,6 @@ func TestLongPollingClient_DoubleStart(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -158,6 +157,7 @@ func TestLongPollingClient_DoubleStart(t *testing.T) {
 				httpClient: server.Client(),
 			},
 		}),
+		WithRetryConfig(100*time.Millisecond, time.Second, 2.0),
 	)
 
 	ctx := context.Background()
@@ -232,7 +232,6 @@ func TestLongPollingClient_ReceivesUpdates(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -242,6 +241,7 @@ func TestLongPollingClient_ReceivesUpdates(t *testing.T) {
 				httpClient: server.Client(),
 			},
 		}),
+		WithRetryConfig(100*time.Millisecond, time.Second, 2.0),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -313,7 +313,6 @@ func TestLongPollingClient_GracefulShutdown(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -323,6 +322,7 @@ func TestLongPollingClient_GracefulShutdown(t *testing.T) {
 				httpClient: server.Client(),
 			},
 		}),
+		WithRetryConfig(100*time.Millisecond, time.Second, 2.0),
 	)
 
 	ctx := context.Background()
@@ -367,7 +367,6 @@ func TestLongPollingClient_IsHealthy(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -378,6 +377,7 @@ func TestLongPollingClient_IsHealthy(t *testing.T) {
 			},
 		}),
 		WithMaxErrors(5),
+		WithRetryConfig(100*time.Millisecond, time.Second, 2.0),
 	)
 
 	// Not running yet - should not be healthy
@@ -412,7 +412,6 @@ func TestLongPollingClient_WithMaxErrors(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -435,7 +434,6 @@ func TestLongPollingClient_WithAllowedUpdates(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -460,7 +458,6 @@ func TestLongPollingClient_UnlimitedErrors(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -487,7 +484,6 @@ func TestLongPollingClient_DoubleStop(t *testing.T) {
 		logger,
 		1,
 		10,
-		100*time.Millisecond,
 		5,
 		time.Minute,
 		time.Minute,
@@ -497,6 +493,7 @@ func TestLongPollingClient_DoubleStop(t *testing.T) {
 				httpClient: server.Client(),
 			},
 		}),
+		WithRetryConfig(100*time.Millisecond, time.Second, 2.0),
 	)
 
 	ctx := context.Background()
@@ -507,6 +504,70 @@ func TestLongPollingClient_DoubleStop(t *testing.T) {
 	// Double stop should not panic (sync.Once protection)
 	client.Stop()
 	client.Stop() // Should not panic
+}
+
+func TestLongPollingClient_WithRetryConfig(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	updates := make(chan TelegramUpdate, 10)
+
+	client := NewLongPollingClient(
+		SecretToken("test-token"),
+		updates,
+		logger,
+		1,
+		10,
+		5,
+		time.Minute,
+		time.Minute,
+		WithRetryConfig(500*time.Millisecond, 30*time.Second, 3.0),
+	)
+
+	if client.retryInitialDelay != 500*time.Millisecond {
+		t.Errorf("expected retryInitialDelay=500ms, got %v", client.retryInitialDelay)
+	}
+	if client.retryMaxDelay != 30*time.Second {
+		t.Errorf("expected retryMaxDelay=30s, got %v", client.retryMaxDelay)
+	}
+	if client.retryBackoffFactor != 3.0 {
+		t.Errorf("expected retryBackoffFactor=3.0, got %v", client.retryBackoffFactor)
+	}
+}
+
+func TestLongPollingClient_CalculateBackoff(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	updates := make(chan TelegramUpdate, 10)
+
+	client := NewLongPollingClient(
+		SecretToken("test-token"),
+		updates,
+		logger,
+		1,
+		10,
+		5,
+		time.Minute,
+		time.Minute,
+		WithRetryConfig(time.Second, 60*time.Second, 2.0),
+	)
+
+	tests := []struct {
+		attempt     int32
+		minExpected time.Duration
+		maxExpected time.Duration
+	}{
+		{1, time.Second, time.Second + 250*time.Millisecond},           // 1s + 0-25% jitter
+		{2, 2 * time.Second, 2*time.Second + 500*time.Millisecond},     // 2s + 0-25% jitter
+		{3, 4 * time.Second, 4*time.Second + time.Second},              // 4s + 0-25% jitter
+		{4, 8 * time.Second, 8*time.Second + 2*time.Second},            // 8s + 0-25% jitter
+		{10, 60 * time.Second, 60*time.Second + 15*time.Second},        // capped at max
+	}
+
+	for _, tt := range tests {
+		backoff := client.calculateBackoff(tt.attempt)
+		if backoff < tt.minExpected || backoff > tt.maxExpected {
+			t.Errorf("attempt %d: expected backoff between %v and %v, got %v",
+				tt.attempt, tt.minExpected, tt.maxExpected, backoff)
+		}
+	}
 }
 
 // testTransport intercepts HTTP requests and redirects them to the test server.

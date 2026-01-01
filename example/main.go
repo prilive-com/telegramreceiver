@@ -32,6 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
+	defer logger.Close() // Release log file handle
 
 	// Channel for receiving Telegram updates
 	updatesChan := make(chan telegramreceiver.TelegramUpdate, 100)
@@ -43,7 +44,7 @@ func main() {
 	case telegramreceiver.ModeWebhook:
 		logger.Info("Starting in webhook mode")
 		webhookHandler := telegramreceiver.NewWebhookHandler(
-			logger,
+			logger.Logger, // Use embedded slog.Logger
 			cfg.WebhookSecret,
 			cfg.AllowedDomain,
 			updatesChan,
@@ -56,14 +57,14 @@ func main() {
 		)
 
 		go func() {
-			if err := telegramreceiver.StartWebhookServer(ctx, cfg, webhookHandler, logger); err != nil {
+			if err := telegramreceiver.StartWebhookServer(ctx, cfg, webhookHandler, logger.Logger); err != nil {
 				logger.Error("Webhook server exited with error", "error", err)
 			}
 		}()
 
 	case telegramreceiver.ModeLongPolling:
 		logger.Info("Starting in long polling mode")
-		pollingClient, err = telegramreceiver.StartLongPolling(ctx, cfg, updatesChan, logger)
+		pollingClient, err = telegramreceiver.StartLongPolling(ctx, cfg, updatesChan, logger.Logger)
 		if err != nil {
 			log.Fatalf("Failed to start long polling: %v", err)
 		}
@@ -81,7 +82,7 @@ func main() {
 	for {
 		select {
 		case update := <-updatesChan:
-			printTelegramUpdate(update, logger)
+			printTelegramUpdate(update, logger.Logger)
 
 		case sig := <-sigChan:
 			logger.Info("Received shutdown signal", "signal", sig)

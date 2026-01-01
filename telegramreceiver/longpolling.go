@@ -2,10 +2,13 @@ package telegramreceiver
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"sync"
@@ -26,10 +29,14 @@ type LongPollingClient struct {
 	// Polling configuration
 	timeout              int
 	limit                int
-	retryDelay           time.Duration
 	maxErrors            int      // Max consecutive errors before stopping (0 = unlimited)
 	allowedUpdates       []string // Optional: filter update types
 	deleteWebhookOnStart bool     // Delete existing webhook before starting
+
+	// Retry configuration with exponential backoff
+	retryInitialDelay  time.Duration // Initial delay before first retry
+	retryMaxDelay      time.Duration // Maximum delay cap
+	retryBackoffFactor float64       // Multiplier for each retry (e.g., 2.0 for doubling)
 
 	// HTTP client
 	client httpClient
@@ -47,6 +54,13 @@ type LongPollingClient struct {
 }
 
 const defaultMaxConsecutiveErrors = 10
+
+// Default retry configuration for exponential backoff
+const (
+	defaultRetryInitialDelay  = 1 * time.Second
+	defaultRetryMaxDelay      = 60 * time.Second
+	defaultRetryBackoffFactor = 2.0
+)
 
 // LongPollingOption configures the LongPollingClient.
 type LongPollingOption func(*LongPollingClient)
@@ -89,6 +103,24 @@ func WithDeleteWebhook(delete bool) LongPollingOption {
 	}
 }
 
+// WithRetryConfig sets exponential backoff parameters for retry logic.
+// initialDelay: delay before first retry (default: 1s)
+// maxDelay: maximum delay cap (default: 60s)
+// backoffFactor: multiplier for each retry (default: 2.0)
+func WithRetryConfig(initialDelay, maxDelay time.Duration, backoffFactor float64) LongPollingOption {
+	return func(c *LongPollingClient) {
+		if initialDelay > 0 {
+			c.retryInitialDelay = initialDelay
+		}
+		if maxDelay > 0 {
+			c.retryMaxDelay = maxDelay
+		}
+		if backoffFactor > 1.0 {
+			c.retryBackoffFactor = backoffFactor
+		}
+	}
+}
+
 // NewLongPollingClient creates a new long polling client.
 // The updates channel must be provided (dependency injection pattern).
 func NewLongPollingClient(
@@ -97,22 +129,23 @@ func NewLongPollingClient(
 	logger *slog.Logger,
 	timeout int,
 	limit int,
-	retryDelay time.Duration,
 	breakerMaxRequests uint32,
 	breakerInterval time.Duration,
 	breakerTimeout time.Duration,
 	opts ...LongPollingOption,
 ) *LongPollingClient {
 	client := &LongPollingClient{
-		botToken:   botToken,
-		updates:    updates,
-		logger:     logger,
-		timeout:    timeout,
-		limit:      limit,
-		retryDelay: retryDelay,
-		maxErrors:  defaultMaxConsecutiveErrors,
-		client:     defaultPollingHTTPClient(timeout),
-		stopCh:     make(chan struct{}),
+		botToken:           botToken,
+		updates:            updates,
+		logger:             logger,
+		timeout:            timeout,
+		limit:              limit,
+		maxErrors:          defaultMaxConsecutiveErrors,
+		retryInitialDelay:  defaultRetryInitialDelay,
+		retryMaxDelay:      defaultRetryMaxDelay,
+		retryBackoffFactor: defaultRetryBackoffFactor,
+		client:             defaultPollingHTTPClient(timeout),
+		stopCh:             make(chan struct{}),
 	}
 
 	// Create default circuit breaker
@@ -162,6 +195,31 @@ func defaultPollingHTTPClient(timeoutSeconds int) *http.Client {
 			ForceAttemptHTTP2:     true,
 		},
 	}
+}
+
+// calculateBackoff computes the next retry delay using exponential backoff with cryptographic jitter.
+// Uses crypto/rand for jitter to avoid thundering herd in distributed systems.
+// Formula: min(maxDelay, initialDelay * (backoffFactor ^ attempt)) + random_jitter
+func (c *LongPollingClient) calculateBackoff(attempt int32) time.Duration {
+	// Calculate base delay with exponential backoff
+	baseDelay := float64(c.retryInitialDelay) * math.Pow(c.retryBackoffFactor, float64(attempt-1))
+
+	// Cap at maxDelay
+	if baseDelay > float64(c.retryMaxDelay) {
+		baseDelay = float64(c.retryMaxDelay)
+	}
+
+	// Add cryptographic jitter (0-25% of base delay)
+	jitterRange := int64(baseDelay * 0.25)
+	if jitterRange > 0 {
+		jitterBig, err := rand.Int(rand.Reader, big.NewInt(jitterRange))
+		if err == nil {
+			baseDelay += float64(jitterBig.Int64())
+		}
+		// If crypto/rand fails, proceed without jitter (fail-safe)
+	}
+
+	return time.Duration(baseDelay)
 }
 
 // Start begins polling for updates from Telegram.
@@ -228,9 +286,11 @@ func (c *LongPollingClient) pollLoop(ctx context.Context) {
 		updates, err := c.fetchUpdates(ctx)
 		if err != nil {
 			errCount := c.consecutiveErrors.Add(1)
+			backoff := c.calculateBackoff(errCount)
 			c.logger.Error("failed to fetch updates",
 				"error", err,
 				"consecutive_errors", errCount,
+				"retry_delay", backoff,
 			)
 
 			// Check max errors (0 = unlimited)
@@ -246,7 +306,7 @@ func (c *LongPollingClient) pollLoop(ctx context.Context) {
 				return
 			case <-c.stopCh:
 				return
-			case <-time.After(c.retryDelay):
+			case <-time.After(backoff):
 				continue
 			}
 		}

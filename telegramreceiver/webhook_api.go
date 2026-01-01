@@ -3,9 +3,11 @@ package telegramreceiver
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 )
@@ -53,13 +55,23 @@ type httpClient interface {
 }
 
 // defaultHTTPClient returns a configured HTTP client for Telegram API calls.
+// Configured with TLS 1.2+, HTTP/2, and secure defaults.
 func defaultHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
 			MaxIdleConns:        10,
 			MaxIdleConnsPerHost: 10,
 			IdleConnTimeout:     90 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			ForceAttemptHTTP2:   true,
+			TLSClientConfig: &tls.Config{
+				MinVersion: tls.VersionTLS12,
+			},
 		},
 	}
 }

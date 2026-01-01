@@ -144,13 +144,21 @@ func StartLongPolling(ctx context.Context, cfg *Config, updates chan<- TelegramU
 		opts = append(opts, WithDeleteWebhook(true))
 	}
 
+	// Configure exponential backoff retry if custom values are set
+	if cfg.PollingRetryInitialDelay > 0 || cfg.PollingRetryMaxDelay > 0 || cfg.PollingRetryBackoffFactor > 1.0 {
+		opts = append(opts, WithRetryConfig(
+			cfg.PollingRetryInitialDelay,
+			cfg.PollingRetryMaxDelay,
+			cfg.PollingRetryBackoffFactor,
+		))
+	}
+
 	client := NewLongPollingClient(
 		cfg.BotToken,
 		updates,
 		logger,
 		cfg.PollingTimeout,
 		cfg.PollingLimit,
-		cfg.PollingRetryDelay,
 		cfg.BreakerMaxRequests,
 		cfg.BreakerInterval,
 		cfg.BreakerTimeout,
