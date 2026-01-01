@@ -49,6 +49,8 @@ go run example/main.go
 ```
 
 **Key components:**
+- `client.go` - **v3 API**: New(), NewFromConfig(), Client type with Start/Stop/Updates
+- `options.go` - **v3 API**: Interface-based Option pattern, With* functions, Presets
 - `telegram_api.go` - WebhookHandler implementing http.Handler with rate limiting, circuit breaker, and constant-time secret validation
 - `longpolling.go` - LongPollingClient with circuit breaker and automatic webhook deletion
 - `webhook_api.go` - SetWebhook, DeleteWebhook, GetWebhookInfo API functions
@@ -57,10 +59,46 @@ go run example/main.go
 - `config.go` - LoadConfig() reads all settings from environment variables
 - `server.go` - StartWebhookServer() and StartLongPolling() with auto webhook management
 - `logger.go` - NewLogger() with JSON output and SecretToken type for log redaction
+- `interfaces.go` - Consumer-side interfaces for testing (Receiver, HTTPClient)
 
 ## Public API
 
-### Webhook Mode
+### v3 API (Recommended)
+
+```go
+// Simple programmatic configuration
+client, err := telegramreceiver.New(token,
+    telegramreceiver.WithMode(telegramreceiver.ModeLongPolling),
+    telegramreceiver.WithPolling(30, 100),
+    telegramreceiver.WithPollingMaxErrors(5),
+    telegramreceiver.ProductionPreset(),
+)
+if err != nil {
+    log.Fatal(err)
+}
+defer client.Stop()
+
+if err := client.Start(ctx); err != nil {
+    log.Fatal(err)
+}
+
+// Process updates
+for update := range client.Updates() {
+    // Handle update
+}
+```
+
+```go
+// Multi-source configuration (config file + env vars + options)
+// Precedence: defaults → config file → env vars → programmatic options
+client, err := telegramreceiver.NewFromConfig("config.yaml",
+    telegramreceiver.WithLogger(customLogger),
+)
+```
+
+### Legacy API (Deprecated - will be removed in v4)
+
+#### Webhook Mode
 ```go
 cfg, _ := telegramreceiver.LoadConfig()
 logger, _ := telegramreceiver.NewLogger(slog.LevelInfo, cfg.LogFilePath)
@@ -76,7 +114,7 @@ handler := telegramreceiver.NewWebhookHandler(
 go telegramreceiver.StartWebhookServer(ctx, cfg, handler, logger)
 ```
 
-### Long Polling Mode
+#### Long Polling Mode
 ```go
 cfg, _ := telegramreceiver.LoadConfig()
 logger, _ := telegramreceiver.NewLogger(slog.LevelInfo, cfg.LogFilePath)

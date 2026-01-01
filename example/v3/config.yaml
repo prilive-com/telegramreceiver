@@ -1,0 +1,55 @@
+# Example configuration file for telegramreceiver v3
+# Environment variables (TELEGRAM_*) override these settings
+# Programmatic options override both
+
+# Required: Bot token from @BotFather
+# Set via TELEGRAM_BOT_TOKEN env var (recommended) or bot_token here
+# bot_token: "123456789:ABCdefGHI..."
+
+# Receiver mode: "webhook" or "longpolling"
+mode: longpolling
+
+# Webhook settings (only used when mode: webhook)
+webhook_port: 8443
+webhook_secret: ""
+# webhook_url: "https://example.com/webhook"
+# tls_cert_path: "/path/to/cert.pem"
+# tls_key_path: "/path/to/key.pem"
+# allowed_domain: "example.com"
+
+# Long polling settings (only used when mode: longpolling)
+polling_timeout: 30
+polling_limit: 100
+polling_max_errors: 10
+polling_delete_webhook: false
+# allowed_updates:
+#   - message
+#   - callback_query
+
+# Retry settings (exponential backoff)
+retry_initial_delay: 1s
+retry_max_delay: 60s
+retry_backoff_factor: 2.0
+
+# Rate limiting
+rate_limit_requests: 10.0
+rate_limit_burst: 20
+
+# Request settings
+max_body_size: 1048576
+read_timeout: 10s
+read_header_timeout: 2s
+write_timeout: 15s
+idle_timeout: 120s
+
+# Circuit breaker
+breaker_max_requests: 5
+breaker_interval: 2m
+breaker_timeout: 60s
+
+# Kubernetes-aware shutdown
+drain_delay: 5s
+shutdown_timeout: 15s
+
+# Logging
+log_file_path: "logs/telegramreceiver.log"

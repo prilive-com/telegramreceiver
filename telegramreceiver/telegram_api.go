@@ -29,7 +29,15 @@ type WebhookHandler struct {
 
 /* ---------- constructor ---------- */
 
-// All tunables are injected – nothing hard-coded.
+// NewWebhookHandler creates a new webhook handler with all tunables injected.
+//
+// Deprecated: Use New() or NewFromConfig() with WithMode(ModeWebhook) instead.
+// This function will be removed in v4.
+//
+//	client, err := telegramreceiver.New(token,
+//	    telegramreceiver.WithWebhook(8443, "secret"),
+//	)
+//	handler := client.WebhookHandler()
 func NewWebhookHandler(
 	logger *slog.Logger,
 	webhookSecret string,

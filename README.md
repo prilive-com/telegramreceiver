@@ -1,6 +1,8 @@
 # telegramreceiver v2
 
 > **Note**: v2.x uses typed structs instead of `json.RawMessage`. See [Migration](#migration-from-v1) below.
+>
+> **New in v2.3**: Simplified configuration API with `New()` and `NewFromConfig()`. See [v3 API](#v3-api-simplified-configuration) below.
 
 **telegramreceiver** is a production-ready Go 1.25+ library for consuming Telegram bot updates with resilience features. Supports both **webhook** and **long polling** modes.
 
@@ -165,6 +167,142 @@ func main() {
         }
     }
 }
+```
+
+---
+
+## v3 API (Simplified Configuration)
+
+The new v3 API provides a cleaner interface with support for programmatic options, environment variables, and config files with proper precedence.
+
+### Simple Usage
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "os"
+    "time"
+
+    "github.com/prilive-com/telegramreceiver/v2/telegramreceiver"
+)
+
+func main() {
+    ctx := context.Background()
+    token := os.Getenv("TELEGRAM_BOT_TOKEN")
+
+    // Create client with options
+    client, err := telegramreceiver.New(token,
+        telegramreceiver.WithMode(telegramreceiver.ModeLongPolling),
+        telegramreceiver.WithPolling(30, 100),
+        telegramreceiver.WithPollingMaxErrors(5),
+        telegramreceiver.WithRetry(time.Second, 60*time.Second, 2.0),
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    if err := client.Start(ctx); err != nil {
+        log.Fatal(err)
+    }
+    defer client.Stop()
+
+    // Process updates
+    for update := range client.Updates() {
+        if update.Message != nil {
+            log.Printf("Message: %s", update.Message.Text)
+        }
+    }
+}
+```
+
+### From Config File + Env Vars
+
+```go
+// Configuration precedence (highest to lowest):
+// 1. Programmatic options (opts...)
+// 2. Environment variables (TELEGRAM_*)
+// 3. Config file
+// 4. Default values
+
+client, err := telegramreceiver.NewFromConfig("config.yaml",
+    telegramreceiver.WithLogger(customLogger),  // Override from config
+)
+```
+
+### Available Options
+
+```go
+// Receiver mode
+telegramreceiver.WithMode(telegramreceiver.ModeLongPolling)
+telegramreceiver.WithMode(telegramreceiver.ModeWebhook)
+
+// Webhook settings
+telegramreceiver.WithWebhook(8443, "secret-token")
+telegramreceiver.WithWebhookTLS("/path/to/cert.pem", "/path/to/key.pem")
+telegramreceiver.WithWebhookURL("https://example.com/webhook")
+telegramreceiver.WithAllowedDomain("example.com")
+
+// Long polling settings
+telegramreceiver.WithPolling(30, 100)  // timeout, limit
+telegramreceiver.WithPollingMaxErrors(5)
+telegramreceiver.WithPollingDeleteWebhook(true)
+telegramreceiver.WithAllowedUpdateTypes([]string{"message", "callback_query"})
+
+// Retry settings (exponential backoff)
+telegramreceiver.WithRetry(time.Second, 60*time.Second, 2.0)
+
+// Rate limiting
+telegramreceiver.WithRateLimit(10.0, 20)  // requests/sec, burst
+
+// Circuit breaker
+telegramreceiver.WithBreakerConfig(5, 2*time.Minute, 60*time.Second)
+
+// Timeouts
+telegramreceiver.WithTimeouts(10*time.Second, 2*time.Second, 15*time.Second, 120*time.Second)
+telegramreceiver.WithMaxBodySize(1048576)
+
+// Kubernetes-aware shutdown
+telegramreceiver.WithShutdown(5*time.Second, 15*time.Second)
+
+// Logging
+telegramreceiver.WithLogger(slogLogger)
+telegramreceiver.WithLogFile("logs/bot.log")
+
+// Testing
+telegramreceiver.WithHTTPClientOption(mockClient)
+
+// Presets
+telegramreceiver.ProductionPreset()
+telegramreceiver.DevelopmentPreset()
+```
+
+### Config File Format
+
+```yaml
+# config.yaml
+bot_token: "123456789:ABCdefGHI..."  # Or use TELEGRAM_BOT_TOKEN env var
+mode: longpolling
+
+# Long polling
+polling_timeout: 30
+polling_limit: 100
+polling_max_errors: 10
+
+# Retry
+retry_initial_delay: 1s
+retry_max_delay: 60s
+retry_backoff_factor: 2.0
+
+# Rate limiting
+rate_limit_requests: 10.0
+rate_limit_burst: 20
+
+# Webhook (if mode: webhook)
+webhook_port: 8443
+webhook_secret: "secret"
 ```
 
 ---

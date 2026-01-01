@@ -123,6 +123,14 @@ func WithRetryConfig(initialDelay, maxDelay time.Duration, backoffFactor float64
 
 // NewLongPollingClient creates a new long polling client.
 // The updates channel must be provided (dependency injection pattern).
+//
+// Deprecated: Use New() or NewFromConfig() instead for a simpler API.
+// This function will be removed in v4.
+//
+//	client, err := telegramreceiver.New(token,
+//	    telegramreceiver.WithMode(telegramreceiver.ModeLongPolling),
+//	    telegramreceiver.WithPolling(30, 100),
+//	)
 func NewLongPollingClient(
 	botToken SecretToken,
 	updates chan<- TelegramUpdate,

@@ -5,6 +5,81 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-01-01
+
+### Added
+
+- **v3 API** - Simplified configuration with modern Go library patterns
+  - `New(token, opts...)` - Simple programmatic constructor
+  - `NewFromConfig(path, opts...)` - Multi-source config (file + env + options)
+  - `Client` type with `Start()`, `Stop()`, `Updates()`, `Config()`, `WebhookHandler()`
+  - Interface-based `Option` pattern for type-safe configuration
+
+- **Configuration Options** (v3)
+  - `WithMode(mode)` - Set receiver mode (webhook/longpolling)
+  - `WithWebhook(port, secret)` - Configure webhook settings
+  - `WithWebhookTLS(certPath, keyPath)` - Set TLS certificate paths
+  - `WithWebhookURL(url)` - Set webhook URL for auto-registration
+  - `WithPolling(timeout, limit)` - Configure long polling
+  - `WithPollingMaxErrors(n)` - Set max consecutive errors
+  - `WithPollingDeleteWebhook(bool)` - Delete webhook before polling
+  - `WithAllowedUpdateTypes(types)` - Filter update types
+  - `WithRetry(initialDelay, maxDelay, factor)` - Exponential backoff settings
+  - `WithRateLimit(rps, burst)` - Rate limiting settings
+  - `WithBreakerConfig(maxReq, interval, timeout)` - Circuit breaker
+  - `WithTimeouts(read, readHeader, write, idle)` - HTTP server timeouts
+  - `WithShutdown(drainDelay, timeout)` - Kubernetes-aware shutdown
+  - `WithLogger(logger)` - Custom slog.Logger
+  - `WithLogFile(path)` - Log file path
+  - `WithHTTPClientOption(client)` - Custom HTTP client for testing
+
+- **Presets** (v3)
+  - `ProductionPreset()` - Production-optimized settings
+  - `DevelopmentPreset()` - Development-friendly settings
+
+- **Multi-source Configuration**
+  - koanf-based configuration loading
+  - Precedence: defaults → config file → env vars (TELEGRAM_*) → programmatic options
+  - YAML config file support
+
+- **Validation**
+  - go-playground/validator integration
+  - Actionable error messages with remediation hints
+
+- **New Files**
+  - `client.go` - v3 Client type and constructors
+  - `options.go` - Option interface and With* functions
+  - `client_test.go` - Tests for v3 API
+  - `interfaces.go` - Consumer-side interfaces (Receiver, HTTPClient, etc.)
+  - `example/v3/main.go` - v3 API example
+  - `example/v3/config.yaml` - Example config file
+
+### Changed
+
+- **Exponential Backoff** - Added cryptographic jitter using `crypto/rand`
+  - Prevents thundering herd in distributed systems
+  - New config: `RetryInitialDelay`, `RetryMaxDelay`, `RetryBackoffFactor`
+
+### Deprecated
+
+- `NewLongPollingClient()` - Use `New()` with `WithMode(ModeLongPolling)` instead
+- `NewWebhookHandler()` - Use `New()` with `WithMode(ModeWebhook)` and `client.WebhookHandler()`
+- `StartWebhookServer()` - Use `New()` with `client.Start()`
+- `StartLongPolling()` - Use `New()` with `client.Start()`
+
+All deprecated functions will be removed in v4.
+
+## [2.2.0] - 2025-12-31
+
+### Added
+
+- **Exponential Backoff with Crypto Jitter** for retry logic
+- **Interfaces** for testability (Receiver, HTTPClient, WebhookProcessor, UpdateHandler)
+
+### Changed
+
+- Retry configuration now uses `PollingRetryInitialDelay`, `PollingRetryMaxDelay`, `PollingRetryBackoffFactor`
+
 ## [2.1.1] - 2025-12-30
 
 ### Changed

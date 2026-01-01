@@ -28,6 +28,9 @@ func (s *ServerState) IsShuttingDown() bool {
 //
 // If WebhookURL and BotToken are configured, it automatically registers
 // the webhook with Telegram before starting the server.
+//
+// Deprecated: Use New() or NewFromConfig() with WithMode(ModeWebhook) instead.
+// This function will be removed in v4.
 func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, logger *slog.Logger) error {
 	if err := validateConfig(cfg); err != nil {
 		logger.Error("Configuration validation failed", "error", err)
@@ -121,6 +124,9 @@ func StartWebhookServer(ctx context.Context, cfg *Config, handler http.Handler, 
 // StartLongPolling creates and starts a long polling client.
 // If POLLING_DELETE_WEBHOOK is true, it deletes any existing webhook before starting.
 // Returns the client so the caller can call Stop() when needed.
+//
+// Deprecated: Use New() or NewFromConfig() with WithMode(ModeLongPolling) instead.
+// This function will be removed in v4.
 func StartLongPolling(ctx context.Context, cfg *Config, updates chan<- TelegramUpdate, logger *slog.Logger) (*LongPollingClient, error) {
 	if err := validateConfig(cfg); err != nil {
 		logger.Error("Configuration validation failed", "error", err)
